@@ -81,7 +81,7 @@ export function DialMeter({
       >
         <div
           className="mono"
-          style={{ color: strokeColor, fontSize: 34, fontWeight: 700 }}
+          style={{ color: strokeColor, fontSize: size < 120 ? 16 : 34, fontWeight: 700 }}
         >
           {value}
         </div>
@@ -90,8 +90,8 @@ export function DialMeter({
             color: "var(--muted-on-dark)",
             letterSpacing: "0.05em",
             textTransform: "uppercase",
-            marginTop: 4,
-            fontSize: 12,
+            marginTop: size < 120 ? 2 : 4,
+            fontSize: size < 120 ? 10 : 12,
           }}
         >
           {unit}
