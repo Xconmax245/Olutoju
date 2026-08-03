@@ -4,6 +4,8 @@
   "main": "src/index.ts",
   "scripts": {
     "dev": "ts-node src/index.ts",
+    "cli": "ts-node src/cli.ts",
+    "proof": "ts-node src/proof/e2e-proof.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
