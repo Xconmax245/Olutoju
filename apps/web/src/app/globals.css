@@ -98,16 +98,6 @@ button {
 /* ---------------------------------------------------------------------------
    MOTION SYSTEM
    --------------------------------------------------------------------------- */
-.io {
-  opacity: 0;
-  transition: opacity .8s, transform .9s cubic-bezier(.2, .8, .2, 1);
-}
-.io.in { opacity: 1; transform: none; }
-.io[data-dir="up"] { transform: translateY(30px); }
-.io[data-dir="left"] { transform: translateX(-56px); }
-.io[data-dir="right"] { transform: translateX(56px); }
-.io[data-dir="scale"] { transform: scale(0.92) translateY(16px); }
-
 .floaty { animation: floatY 4.5s ease-in-out infinite; }
 @keyframes floatY {
   0%, 100% { transform: translateY(0); }
@@ -160,6 +150,5 @@ button {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .io { opacity: 1 !important; transform: none !important; transition: none !important; }
   .floaty, .blink-dot, .marquee-track { animation: none !important; }
 }
