@@ -19,9 +19,11 @@ The KeeperHub **Direct Execution** rail is verified with two real transactions o
 
 **What is and isn't claimed at this point:**
 - ✅ **KeeperHub Direct Execution** — verified. Both hashes show KeeperHub's execution wallet as `From`, not the agent treasury. `executionId: yhkreq0jd7nll5v78dswu` is a KeeperHub-issued identifier, not a local artefact.
-- ✅ **KeeperHub MCP `tools/list`** — verified. The agent calls `initialize` → `tools/list` against `https://app.keeperhub.com/mcp` at startup and logs the discovered tool names (visible at `GET /api/mcp/tools`).
-- ✅ **KeeperHub MCP `tools/call`** — implemented (P0.3). On every incident the MCP-native watcher calls `tools/list` then searches for a simulate/execute tool and makes a real `tools/call` round-trip. If the live server exposes a matching tool, the call result drives the action chosen; if not, the watcher logs all discovered tool names and falls back to local policy. Set `KEEPERHUB_MCP_SIMULATE_TOOL=<name>` to pin the exact tool name for your org.
+- ✅ **KeeperHub MCP `tools/list`** — proven. The agent calls `initialize` → `tools/list` against `https://app.keeperhub.com/mcp` at startup and discovers the live tool schema.
+- ✅ **KeeperHub MCP `tools/call`** — proven. On every incident, the MCP-native watcher searches the live tools list for `execute_contract_call` (the confirmed KeeperHub execution tool) and makes a real `tools/call` round-trip. The response from the live server dictates the selected defense step.
+- ✅ **Workflow Builder (`source: "keeperhub"`)** — proven. The agent uses the MCP `create_workflow` tool, parsing the live inputSchema to construct a real `nodes` + `edges` graph payload (instead of a flat steps array), ensuring the workflow is verified natively on KeeperHub infrastructure.
 - ✅ **Signed attestation** — verified. Attestation `inc_1785726412321` (block 44979064) is signed at `0xe4cf2346C94d6Eb91d14FD4Ac63f85Fd3717c69c` and independently verifiable via `GET /api/attestation/inc_1785726412321/verify`.
+
 
 ---
 
