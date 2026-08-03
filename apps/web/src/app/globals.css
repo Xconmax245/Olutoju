@@ -1,0 +1,165 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   OLUTOJU DESIGN SYSTEM — adopted from usetapa.vercel.app, remapped to Olutoju
+   --------------------------------------------------------------------------- */
+:root {
+  /* Palette */
+  --ink: #12112a;
+  --ink-soft: #1e1c46;
+  --ink-card: #191740;
+  --ink-line: rgba(243, 240, 250, 0.14);
+  --paper: #f3f0fa;
+  --paper-line: rgba(18, 17, 42, 0.12);
+  --lime: #d6ff4f;
+  --coral: #ff5d5d;
+  --peri: #b9aefb;
+  --muted: #5a5578;
+  --muted-on-dark: #a9a4cc;
+  --lime-bg: rgba(214, 255, 79, 0.12);
+  --coral-bg: rgba(255, 93, 93, 0.12);
+
+  /* Typography */
+  --font-display: 'Fredoka', sans-serif;
+  --font-body: 'General Sans', sans-serif;
+  --font-mono: 'Space Mono', monospace;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  font-family: var(--font-body);
+  overflow-x: hidden;
+}
+
+h1, h2, h3, .display {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+  line-height: 1.02;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  cursor: pointer;
+  background: none;
+  border: none;
+  font-family: inherit;
+}
+
+#how, #live, #celo, #problem { scroll-margin-top: 96px; }
+
+/* ---------------------------------------------------------------------------
+   BUTTONS & PILLS — "shrink on hover" micro-interaction
+   --------------------------------------------------------------------------- */
+.btn-primary {
+  background: var(--ink);
+  color: var(--lime);
+  border-radius: 100px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 28px;
+  font-size: 15px;
+  font-weight: 600;
+  transition: transform .18s, background .18s, color .18s;
+}
+.btn-primary:hover { background: var(--lime); color: var(--ink); transform: scale(0.94); }
+
+.btn-secondary {
+  border: 1.5px solid var(--paper-line);
+  color: var(--ink);
+  border-radius: 100px;
+  padding: 15px 26px;
+  font-size: 15px;
+  font-weight: 600;
+  transition: transform .18s, background .18s, color .18s, border-color .18s;
+}
+.btn-secondary:hover { background: var(--ink); color: var(--lime); border-color: var(--ink); transform: scale(0.94); }
+
+/* ---------------------------------------------------------------------------
+   MOTION SYSTEM
+   --------------------------------------------------------------------------- */
+.io {
+  opacity: 0;
+  transition: opacity .8s, transform .9s cubic-bezier(.2, .8, .2, 1);
+}
+.io.in { opacity: 1; transform: none; }
+.io[data-dir="up"] { transform: translateY(30px); }
+.io[data-dir="left"] { transform: translateX(-56px); }
+.io[data-dir="right"] { transform: translateX(56px); }
+.io[data-dir="scale"] { transform: scale(0.92) translateY(16px); }
+
+.floaty { animation: floatY 4.5s ease-in-out infinite; }
+@keyframes floatY {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-9px); }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+.blink-dot { animation: blink 1.4s ease infinite; }
+
+@keyframes marqueeScroll {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+.marquee-track {
+  width: max-content;
+  display: flex;
+  animation: marqueeScroll 22s linear infinite;
+}
+
+/* Ring / dial fill animation for decorative meters */
+@keyframes fillMeter {
+  0% { stroke-dashoffset: 552px; }
+  45% { stroke-dashoffset: 120px; }
+  55% { stroke-dashoffset: 120px; }
+  70% { stroke-dashoffset: 552px; }
+  100% { stroke-dashoffset: 552px; }
+}
+
+.hide-scrollbar::-webkit-scrollbar { display: none; }
+.hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* ---------------------------------------------------------------------------
+   RESPONSIVE — collapse two-column layouts on small screens
+   --------------------------------------------------------------------------- */
+@media (max-width: 860px) {
+  .hero { grid-template-columns: 1fr !important; }
+  .step-block { grid-template-columns: 1fr !important; gap: 24px !important; }
+  .step-block .io[style*="order: -1"] { order: 0 !important; }
+  .celo-grid { grid-template-columns: 1fr !important; }
+  .dash-grid { grid-template-columns: 1fr !important; }
+  .preview-grid { grid-template-columns: 1fr !important; text-align: center; }
+  .nav-links { display: none !important; }
+}
+
+@media (max-width: 560px) {
+  .cta-dial { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .io { opacity: 1 !important; transform: none !important; transition: none !important; }
+  .floaty, .blink-dot, .marquee-track { animation: none !important; }
+}
