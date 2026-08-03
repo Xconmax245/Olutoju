@@ -105,19 +105,20 @@ export class Watcher {
    */
   private async proposeViaMcp(args: ProposeArgs, log: (m: string) => void): Promise<string> {
     // Candidate tool-name hints for a simulate/suggest/execute surface.
+    // execute_contract_call is the confirmed live tool name on KeeperHub's MCP server.
     // Ordered from most- to least-specific so the first hit is the best match.
     const SIMULATE_TOOL_HINTS = [
+      "execute_contract_call",   // confirmed live on app.keeperhub.com/mcp
+      "execute-contract-call",
       "simulate-contract-call",
       "simulate_contract_call",
       "simulatecontractcall",
-      "execute-contract-call",
-      "execute_contract_call",
       "contract-call",
       "suggest-defense",
       "suggest_defense",
     ];
-    const SIMULATE_KEYWORDS = ["simulate", "contract"];
-    const EXECUTE_KEYWORDS  = ["execute", "contract"];
+    const SIMULATE_KEYWORDS = ["execute", "contract"];
+    const EXECUTE_KEYWORDS  = ["contract", "call"];
 
     if (!args.mcp) {
       log(`[Watcher ${this.identity.id}] No MCP client injected; proposing from local policy.`);
