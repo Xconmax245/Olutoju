@@ -17,15 +17,26 @@ contract MockVault {
     bool public paused;               // true once pausePosition() lands
     bool public blockPrimaryDefense;  // when true, topUpCollateral() reverts (forces escalation)
 
+    // Multi-threat state (§4.2): beyond a plain health-factor drop, the vault can
+    // model an oracle price deviation and a liquidity drain so detection has more
+    // than one threat type to classify.
+    uint256 public oraclePrice;       // scaled by 100 (e.g., 100 = $1.00 peg)
+    uint256 public liquidityBps;      // available liquidity, basis points (10000 = 100%)
+
     event HealthFactorDegraded(uint256 newHealthFactor);
     event CollateralToppedUp(uint256 newHealthFactor);
     event PositionPartiallyUnwound(uint256 newHealthFactor);
     event PositionPaused();
     event PrimaryDefenseBlockSet(bool blocked);
+    event OracleDeviation(uint256 newOraclePrice);
+    event LiquidityDrained(uint256 newLiquidityBps);
 
     constructor() {
-        healthFactor = 150; // default 1.50 (Safe)
+        healthFactor = 150;   // default 1.50 (Safe)
+        oraclePrice = 100;    // $1.00 peg
+        liquidityBps = 10000; // fully liquid
     }
+
 
     // ----------------------------------------------------------------------
     // Chaos controls (demo-only, called by the treasury signer)
@@ -43,6 +54,24 @@ contract MockVault {
         blockPrimaryDefense = blocked;
         emit PrimaryDefenseBlockSet(blocked);
     }
+
+    /// Inject an oracle price deviation (e.g. 92 = $0.92, an 8% de-peg).
+    function triggerOracleDeviation(uint256 newPrice) external {
+        oraclePrice = newPrice;
+        // A de-peg also stresses the health factor proportionally.
+        if (newPrice < 100 && healthFactor > 105) {
+            healthFactor = 108; // pushed toward danger by the price move
+            emit HealthFactorDegraded(healthFactor);
+        }
+        emit OracleDeviation(newPrice);
+    }
+
+    /// Drain available liquidity (e.g. 2000 = only 20% liquidity remains).
+    function triggerLiquidityDrain(uint256 newLiquidityBps) external {
+        liquidityBps = newLiquidityBps;
+        emit LiquidityDrained(newLiquidityBps);
+    }
+
 
     // ----------------------------------------------------------------------
     // Defense escalation path (routed through KeeperHub Direct Execution)
