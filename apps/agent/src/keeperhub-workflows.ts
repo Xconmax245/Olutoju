@@ -202,15 +202,39 @@ export async function ensureDefenseWorkflow(args: RegisterWorkflowArgs): Promise
     discovery,
   };
 
-  const stepPayload = steps.map((s) => ({
+  // Build the workflow as a KeeperHub graph (nodes + edges).
+  // KeeperHub's create_workflow tool requires this format — not a flat steps[].
+  // Layout: one manual-trigger node feeds into one action node per defense step,
+  // chained sequentially: trigger → step[0] → step[1] → step[2].
+  const triggerNode = {
+    id: "trigger",
+    type: "trigger",
+    config: {
+      triggerType: "manual",
+      label: "Sentinel Guardian Trigger",
+      description: "Fired by the Sentinel Mesh when a position's health factor breaches the threshold.",
+    },
+  };
+  const actionNodes = steps.map((s) => ({
     id: s.id,
-    label: s.label,
-    type: "contract-call",
-    functionName: s.functionName,
-    functionArgs: s.functionArgs ?? [],
-    simulateFirst: true,
-    severity: s.severity,
+    type: "action",
+    config: {
+      actionType: "execute_contract_call",
+      label: s.label,
+      description: `Defense step: ${s.functionName} (severity=${s.severity})`,
+      contract_address: args.contractAddress,
+      chain_id: String(args.chainId),
+      function_name: s.functionName,
+      function_args: JSON.stringify(s.functionArgs ?? []),
+      simulateFirst: true,
+    },
   }));
+  const nodes = [triggerNode, ...actionNodes];
+  // Edges: trigger → first step → second step → …
+  const edges = [
+    { source: "trigger", target: steps[0]?.id ?? "restore-collateral" },
+    ...steps.slice(0, -1).map((s, i) => ({ source: s.id, target: steps[i + 1].id })),
+  ];
 
   // ---- Path A: create it as a REAL KeeperHub workflow over MCP --------------
   try {
@@ -232,14 +256,15 @@ export async function ensureDefenseWorkflow(args: RegisterWorkflowArgs): Promise
     discovery.matchedListTool = listTool?.name;
 
     if (createTool) {
-      log(`[Workflows] Creating KeeperHub workflow via MCP tool "${createTool.name}"...`);
+      log(`[Workflows] Creating KeeperHub workflow via MCP tool "${createTool.name}" (nodes=${nodes.length}, edges=${edges.length})...`);
+      // Use idempotency_key so repeated agent restarts don't create duplicates.
       const result = await mcp.callTool(createTool.name, {
         name,
-        slug,
         description,
-        chainId: args.chainId,
-        contractAddress: args.contractAddress,
-        steps: stepPayload,
+        nodes,
+        edges,
+        enabled: false,
+        idempotency_key: slug,
       });
 
       if (!result.isError) {
@@ -258,8 +283,9 @@ export async function ensureDefenseWorkflow(args: RegisterWorkflowArgs): Promise
         log(`[Workflows] KeeperHub workflow created via MCP: id=${created.workflowId} slug=${created.slug} verified=${verified}.`);
         return created;
       }
-      discovery.notes.push(`MCP create tool "${createTool.name}" returned isError.`);
-      log(`[Workflows] MCP create-workflow returned an error; trying REST fallback.`);
+      const errDetail = result.content?.[0]?.text ?? JSON.stringify(result.data ?? "");
+      discovery.notes.push(`MCP create tool "${createTool.name}" returned isError: ${errDetail}`);
+      log(`[Workflows] MCP create-workflow returned an error (${errDetail}); trying REST fallback.`);
     } else {
       discovery.notes.push("No workflow-authoring MCP tool discovered.");
       log(`[Workflows] No workflow-authoring MCP tool discovered; trying REST fallback.`);
@@ -280,7 +306,8 @@ export async function ensureDefenseWorkflow(args: RegisterWorkflowArgs): Promise
         description,
         chainId: args.chainId,
         contractAddress: args.contractAddress,
-        steps: stepPayload,
+        nodes,
+        edges,
       });
       const created: RegisteredWorkflow = {
         ...base,
