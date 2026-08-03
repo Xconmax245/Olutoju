@@ -240,7 +240,9 @@ export class KeeperHubClient {
     description: string;
     chainId: number;
     contractAddress: string;
-    steps: unknown[];
+    nodes: unknown[];
+    edges: unknown[];
+    [k: string]: unknown;
   }): Promise<{ workflowId?: string; slug?: string; via: string; verified: boolean }> {
     const candidatePaths = (
       process.env.KEEPERHUB_WORKFLOW_PATH || "/workflows,/workflow/create,/workflows/create"
