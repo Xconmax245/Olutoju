@@ -6,6 +6,7 @@ import Link from "next/link";
 import { ethers } from "ethers";
 import { Logo } from "@/components/ui/Logo";
 import { DialMeter } from "@/components/ui/DialMeter";
+import { MeshPanel } from "@/components/MeshPanel";
 import { clockTime, relativeTime, shortHash } from "@/lib/format";
 
 function hfToFraction(hf: number): number {
@@ -330,6 +331,11 @@ export default function Dashboard() {
             )}
           </div>
         </section>
+      </div>
+
+      {/* SENTINEL MESH — Workflow Builder surface (fleet, workflows, MCP tools) */}
+      <div style={{ maxWidth: 1120, margin: "0 auto", padding: "0 24px 12px" }}>
+        <MeshPanel />
       </div>
 
       {/* ATTESTATION MODAL */}
