@@ -50,6 +50,10 @@ export class KeeperHubMcpClient {
   private sessionId?: string;
   private nextId = 1;
   private initialized = false;
+  /** Cached tool list + the time it was fetched (ms epoch). */
+  private toolCache?: { tools: McpTool[]; fetchedAt: number };
+  /** How long a discovered tool list stays fresh before re-listing. */
+  private toolCacheTtlMs: number;
 
   constructor(apiKey: string, endpoint?: string) {
     if (!apiKey || !apiKey.startsWith("kh_")) {
@@ -58,7 +62,14 @@ export class KeeperHubMcpClient {
     this.apiKey = apiKey;
     this.endpoint =
       endpoint || process.env.KEEPERHUB_MCP_URL || "https://app.keeperhub.com/mcp";
+    this.toolCacheTtlMs = Number(process.env.KEEPERHUB_MCP_TOOL_TTL_MS || 60_000);
   }
+
+  /** The resolved MCP endpoint (useful for logging / dashboards). */
+  get endpointUrl(): string {
+    return this.endpoint;
+  }
+
 
   private headers(): Record<string, string> {
     const h: Record<string, string> = {
@@ -126,17 +137,62 @@ export class KeeperHubMcpClient {
     void result;
   }
 
-  /** Discover the tools KeeperHub exposes over MCP. */
-  async listTools(): Promise<McpTool[]> {
+  /**
+   * Discover the tools KeeperHub exposes over MCP. Results are cached for
+   * `toolCacheTtlMs` so repeated discovery (fleet startup, per-incident races)
+   * does not hammer the MCP endpoint. Pass `force` to bypass the cache.
+   */
+  async listTools(force = false): Promise<McpTool[]> {
+    if (!force && this.toolCache && Date.now() - this.toolCache.fetchedAt < this.toolCacheTtlMs) {
+      return this.toolCache.tools;
+    }
     await this.initialize();
     const result = await this.rpc("tools/list", {});
     const tools: any[] = result?.tools ?? [];
-    return tools.map((t) => ({
+    const mapped: McpTool[] = tools.map((t) => ({
       name: t.name,
       description: t.description,
       inputSchema: t.inputSchema,
     }));
+    this.toolCache = { tools: mapped, fetchedAt: Date.now() };
+    return mapped;
   }
+
+  /**
+   * Resolve an MCP tool by trying, in order: an explicit env override, an exact
+   * (case-insensitive) name match against `hints`, then a fuzzy match where the
+   * tool name contains every keyword in `keywords`. Returns undefined if the
+   * live server exposes nothing that plausibly matches — callers can then fail
+   * soft with honest provenance instead of guessing wrong.
+   */
+  async findTool(opts: {
+    hints: string[];
+    keywords: string[];
+    /** Optional env var that, if set, pins the exact tool name to use. */
+    envOverride?: string;
+  }): Promise<McpTool | undefined> {
+    const tools = await this.listTools();
+    const lower = tools.map((t) => ({ t, n: t.name.toLowerCase() }));
+
+    // 1. Explicit operator override (most authoritative).
+    const override = opts.envOverride ? process.env[opts.envOverride] : undefined;
+    if (override) {
+      const pinned = lower.find((x) => x.n === override.toLowerCase());
+      if (pinned) return pinned.t;
+    }
+
+    // 2. Exact name match against known hints.
+    for (const hint of opts.hints) {
+      const exact = lower.find((x) => x.n === hint.toLowerCase());
+      if (exact) return exact.t;
+    }
+
+    // 3. Fuzzy: the tool name must contain every keyword.
+    const kws = opts.keywords.map((k) => k.toLowerCase());
+    const fuzzy = lower.find((x) => kws.every((k) => x.n.includes(k)));
+    return fuzzy?.t;
+  }
+
 
   /** Invoke a KeeperHub MCP tool by name with structured arguments. */
   async callTool(name: string, args: Record<string, unknown> = {}): Promise<McpToolCallResult> {
