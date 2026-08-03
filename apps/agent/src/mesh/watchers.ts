@@ -92,18 +92,97 @@ export class Watcher {
     };
   }
 
-  /** MCP-native watcher: discover tools first, then pick the restore action. */
+  /**
+   * MCP-native watcher: discover tools via `tools/list`, then make a REAL
+   * `tools/call` round-trip to determine the recommended defensive action.
+   *
+   * This is the piece that closes the gap between MCP discovery (already
+   * proven) and MCP execution-through-the-protocol-surface. We look for any
+   * simulate/execute tool the live server exposes, call it with the current
+   * position context, and use its response to pick an action. If the live
+   * server doesn't expose a matching tool we fall back to the local policy
+   * and log the honest reason — nothing is silently claimed.
+   */
   private async proposeViaMcp(args: ProposeArgs, log: (m: string) => void): Promise<string> {
-    if (args.mcp) {
-      try {
-        const tools = await args.mcp.listTools();
-        log(`[Watcher ${this.identity.id}] Discovered ${tools.length} KeeperHub MCP tools before proposing.`);
-      } catch (err: any) {
-        log(`[Watcher ${this.identity.id}] MCP discovery unavailable (${err?.message}); proposing from policy.`);
-      }
+    // Candidate tool-name hints for a simulate/suggest/execute surface.
+    // Ordered from most- to least-specific so the first hit is the best match.
+    const SIMULATE_TOOL_HINTS = [
+      "simulate-contract-call",
+      "simulate_contract_call",
+      "simulatecontractcall",
+      "execute-contract-call",
+      "execute_contract_call",
+      "contract-call",
+      "suggest-defense",
+      "suggest_defense",
+    ];
+    const SIMULATE_KEYWORDS = ["simulate", "contract"];
+    const EXECUTE_KEYWORDS  = ["execute", "contract"];
+
+    if (!args.mcp) {
+      log(`[Watcher ${this.identity.id}] No MCP client injected; proposing from local policy.`);
+      return args.primaryBlocked ? "partialUnwind" : "topUpCollateral";
     }
-    // If the primary is blocked, an informed watcher proposes the escalation.
-    return args.primaryBlocked ? "partialUnwind" : "topUpCollateral";
+
+    // ---- Step 1: tools/list (discovery) ------------------------------------
+    let toolNames: string[] = [];
+    try {
+      const tools = await args.mcp.listTools();
+      toolNames = tools.map(t => t.name);
+      log(`[Watcher ${this.identity.id}] MCP tools/list: discovered ${tools.length} KeeperHub tools [${toolNames.slice(0, 6).join(", ")}${tools.length > 6 ? " …" : ""}].`);
+    } catch (err: any) {
+      log(`[Watcher ${this.identity.id}] MCP tools/list unavailable (${err?.message}); proposing from local policy.`);
+      return args.primaryBlocked ? "partialUnwind" : "topUpCollateral";
+    }
+
+    // ---- Step 2: tools/call (execution through MCP) -----------------------
+    let callTool: import("../keeperhub-mcp").McpTool | undefined;
+    try {
+      // Try simulate first, then execute — prefer dry-run if the server exposes it.
+      callTool =
+        await args.mcp.findTool({ hints: SIMULATE_TOOL_HINTS, keywords: SIMULATE_KEYWORDS, envOverride: "KEEPERHUB_MCP_SIMULATE_TOOL" }) ??
+        await args.mcp.findTool({ hints: SIMULATE_TOOL_HINTS, keywords: EXECUTE_KEYWORDS,  envOverride: "KEEPERHUB_MCP_EXECUTE_TOOL"  });
+    } catch (err: any) {
+      log(`[Watcher ${this.identity.id}] MCP tool search failed (${err?.message}); proposing from local policy.`);
+      return args.primaryBlocked ? "partialUnwind" : "topUpCollateral";
+    }
+
+    if (!callTool) {
+      // Honest: the server doesn't expose a simulate/execute tool we can match.
+      // Log the actual tool names so the gap is auditable, not hidden.
+      log(`[Watcher ${this.identity.id}] MCP tools/call: no simulate/execute tool found in [${toolNames.join(", ")}]. Falling back to local policy. (Set KEEPERHUB_MCP_SIMULATE_TOOL=<name> to pin a tool.)`);
+      return args.primaryBlocked ? "partialUnwind" : "topUpCollateral";
+    }
+
+    // A matching tool exists — make the real tools/call round-trip.
+    const chosenAction = args.primaryBlocked ? "partialUnwind" : "topUpCollateral";
+    try {
+      log(`[Watcher ${this.identity.id}] MCP tools/call: invoking "${callTool.name}" with action=${chosenAction}, hf=${args.healthFactor} …`);
+      const result = await args.mcp.callTool(callTool.name, {
+        functionName: chosenAction,
+        healthFactor: args.healthFactor,
+        threshold:    args.primaryBlocked ? "escalate" : "restore",
+        simulate:     true,
+      });
+
+      if (result.isError) {
+        log(`[Watcher ${this.identity.id}] MCP tools/call "${callTool.name}" returned isError; using local policy action "${chosenAction}".`);
+      } else {
+        // Try to extract a server-recommended action from the response.
+        const serverAction: string | undefined =
+          result.data?.functionName ??
+          result.data?.action ??
+          result.data?.recommendedAction;
+        const finalAction = serverAction || chosenAction;
+        log(`[Watcher ${this.identity.id}] MCP tools/call "${callTool.name}" OK. Server response: ${JSON.stringify(result.data ?? result.content?.[0]?.text ?? "(no body)")}. Using action: "${finalAction}".`);
+        return finalAction;
+      }
+    } catch (err: any) {
+      log(`[Watcher ${this.identity.id}] MCP tools/call "${callTool.name}" threw (${err?.message}); using local policy action "${chosenAction}".`);
+    }
+
+    // All paths fall through to the policy-derived action.
+    return chosenAction;
   }
 
   /** "LangChain"-style watcher: walk a tiny policy chain to choose an action. */
