@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "generatedAt": "2026-08-03T21:45:32.092Z",
+  "generatedAt": "2026-08-03T21:52:39.254Z",
   "chainId": 84532,
   "network": "Base Sepolia",
   "vaultAddress": "0x6f3A57f763e54dAED307433E86fa1AfE840c3f09",
@@ -59,10 +59,16 @@
     "functionName": "topUpCollateral",
     "sponsorGas": true,
     "outcome": "success",
-    "txHash": "0xa8ef4e7cfc720a0b7c815e62c91663801d7e2823d37869feac07775fe1818e66",
-    "transactionLink": "https://sepolia.basescan.org/tx/0xa8ef4e7cfc720a0b7c815e62c91663801d7e2823d37869feac07775fe1818e66",
-    "blockNumber": 45012625,
+    "txHash": "0x33d55b6533d1b34a3d276fe08a032078f84964aa99a28f371cc1f3b3e1f1d184",
+    "transactionLink": "https://sepolia.basescan.org/tx/0x33d55b6533d1b34a3d276fe08a032078f84964aa99a28f371cc1f3b3e1f1d184",
+    "blockNumber": 45012839,
     "receiptStatus": 1
   },
-  "notes": []
+  "notes": [],
+  "settlement": {
+    "x402TxHash": "0x488da2a4b2128e3be606e81ede462d102688b43e8346dfb58e82717936b74b5d",
+    "x402Status": true,
+    "mppTxHash": "0xfe311dee7f379ee779c01331e2669909f37e8246a927867546bd154b7f07adfb",
+    "mppStatus": true
+  }
 }

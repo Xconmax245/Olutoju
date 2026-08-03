@@ -32,8 +32,12 @@ import { KeeperHubClient } from "../keeperhub";
 import { KeeperHubMcpClient } from "../keeperhub-mcp";
 import { ensureDefenseWorkflow } from "../keeperhub-workflows";
 import { runDefenseWorkflow } from "../workflows/defense-workflow";
+import { buildIncidentReport } from "../incident-report";
+import { settleX402, computeAdaptiveBounty } from "../x402";
+import { MppRetainer } from "../mpp";
 
 dotenv.config();
+
 
 const MockVaultJsonABI = [
   { type: "function", name: "topUpCollateral", stateMutability: "nonpayable", inputs: [], outputs: [] },
@@ -72,6 +76,12 @@ interface ProofArtifact {
     blockNumber?: number;
     gasUsed?: string;
     receiptStatus?: number;
+  };
+  settlement?: {
+    x402TxHash?: string;
+    x402Status?: boolean;
+    mppTxHash?: string;
+    mppStatus?: boolean;
   };
   notes: string[];
 }
@@ -209,6 +219,97 @@ async function main() {
       }
     } catch (err: any) {
       notes.push(`Receipt fetch failed: ${err?.message}`);
+    }
+  }
+
+  // 6. Settlement Integration (x402 + MPP)
+  if (artifact.execution.txHash && process.env.TREASURY_PRIVATE_KEY) {
+    try {
+      const watcherWallet = new ethers.Wallet(process.env.TREASURY_PRIVATE_KEY, provider);
+      const incidentId = `proof_${Date.now()}`;
+      
+      const report = await buildIncidentReport({
+        incidentId,
+        chainId,
+        contractAddress: vault,
+        trigger: { 
+          positionId: "proof-pos-1", 
+          positionLabel: "Proof Position", 
+          protocol: "MockVault", 
+          threatType: "liquidation", 
+          healthFactor: "1.05", 
+          threshold: "1.10", 
+          detectedAt: new Date().toISOString() 
+        },
+        run: {
+          workflowId: "vfgnrtrjqv3j8jryv18yd",
+          contractAddress: vault,
+          chainId,
+          startedAt: new Date().toISOString(),
+          finishedAt: new Date().toISOString(),
+          outcome: "success",
+          steps: [],
+          winningStep: {
+            id: "proof",
+            label: "Proof Execution",
+            functionName: fn,
+            severity: "restore",
+            txHash: artifact.execution.txHash,
+            blockNumber: artifact.execution.blockNumber || 0,
+            transactionLink: artifact.execution.transactionLink || "",
+            gasUsed: artifact.execution.gasUsed || "0",
+            simulated: true,
+            simulationPassed: true,
+            executed: true,
+            startedAt: new Date().toISOString(),
+            finishedAt: new Date().toISOString(),
+          }
+        },
+        finalHealthFactor: "1.50",
+        watcher: { id: "e2e-proof-runner", framework: "script", address: watcherWallet.address },
+        signer: watcherWallet,
+      });
+
+      artifact.settlement = {};
+
+      // X402
+      if (process.env.X402_ASSET && process.env.X402_PAYER_KEY && process.env.X402_PAYOUT_ADDRESS) {
+        const payerSigner = new ethers.Wallet(process.env.X402_PAYER_KEY, provider);
+        const amount = await computeAdaptiveBounty({ provider, baseUsdc: Number(process.env.X402_BASE_USDC || 5), severity: "medium" });
+        const x402 = await settleX402({
+          report,
+          challenge: { amount, asset: process.env.X402_ASSET, payTo: process.env.X402_PAYOUT_ADDRESS, nonce: incidentId },
+          provider,
+          payerSigner,
+          log: (m: string) => console.log(m)
+        });
+        artifact.settlement.x402TxHash = x402.txHash;
+        artifact.settlement.x402Status = x402.settled;
+      }
+
+      // MPP
+      if (process.env.MPP_ASSET && process.env.MPP_PAYOUT_ADDRESS) {
+        const retainer = new MppRetainer({
+          asset: process.env.MPP_ASSET,
+          payTo: process.env.MPP_PAYOUT_ADDRESS,
+          amountPerPeriod: process.env.MPP_AMOUNT_PER_PERIOD || "2000000",
+          periodSeconds: Number(process.env.MPP_PERIOD_SECONDS || 60),
+          protocol: "MockVault_Proof",
+        });
+        const payerSigner = process.env.X402_PAYER_KEY ? new ethers.Wallet(process.env.X402_PAYER_KEY, provider) : undefined;
+        const mpp = await retainer.settleDuePeriod({
+          provider,
+          payerSigner,
+          log: (m: string) => console.log(m)
+        });
+        if (mpp) {
+          artifact.settlement.mppTxHash = mpp.txHash;
+          artifact.settlement.mppStatus = true;
+        }
+      }
+    } catch (err: any) {
+      notes.push(`Settlement proof failed: ${err?.message}`);
+      console.warn(`[proof] Settlement skipped/failed: ${err?.message}`);
     }
   }
 
