@@ -28,16 +28,12 @@ export function Nav() {
       <Link
         href="/"
         style={{
-          fontFamily: "var(--font-display)",
           display: "flex",
           alignItems: "center",
           gap: 9,
-          fontSize: 19,
-          fontWeight: 700,
         }}
       >
-        <Logo />
-        olutoju
+        <Logo size={28} />
       </Link>
 
       <div className="nav-links" style={{ display: "flex", gap: 26, fontSize: 14, fontWeight: 500 }}>

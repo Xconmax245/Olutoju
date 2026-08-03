@@ -16,8 +16,7 @@ export function Footer() {
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <Logo />
-        <span style={{ fontWeight: 600 }}>olutoju</span>
+        <Logo size={28} />
       </div>
       <div style={{ color: "var(--muted)", fontSize: 14 }}>
         A demo guardian for Aave on Base Sepolia · settled via KeeperHub

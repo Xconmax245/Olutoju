@@ -1,34 +1,24 @@
+import Image from "next/image";
+
 interface LogoProps {
-  /** When true, the square renders in --paper for use on dark surfaces. */
+  /** When true, the square renders in --paper for use on dark surfaces (kept for compatibility). */
   onDark?: boolean;
   size?: number;
 }
 
 /**
- * Olutoju brand mark — adopts the reference's exact construction, recolored
- * to the Olutoju palette. The square flips to --paper on dark surfaces.
+ * Olutoju brand mark using the provided PNG logo.
  */
-export function Logo({ onDark = false, size = 28 }: LogoProps) {
+export function Logo({ size = 32 }: LogoProps) {
+  // Original is 677x369. Aspect ratio ~1.83
+  const width = Math.round(size * (677 / 369));
   return (
-    <svg
-      viewBox="0 0 48 48"
-      width={size}
-      height={size}
-      aria-hidden="true"
-      focusable="false"
-    >
-      <g transform="rotate(-8 24 24)">
-        <rect
-          x="6"
-          y="6"
-          width="36"
-          height="36"
-          rx="12"
-          fill={onDark ? "var(--paper)" : "var(--ink)"}
-        />
-        <circle cx="24" cy="20" r="9" fill="var(--lime)" />
-      </g>
-      <circle cx="35" cy="36" r="5.5" fill="var(--coral)" />
-    </svg>
+    <Image 
+      src="/logo.png" 
+      alt="Olutoju Logo" 
+      width={width} 
+      height={size} 
+      style={{ objectFit: "contain", display: "block" }}
+    />
   );
 }
