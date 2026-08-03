@@ -38,7 +38,7 @@ const MOCK_ROW: React.CSSProperties = {
 export function HowItWorks() {
   return (
     <section id="how" style={{ maxWidth: 1200, margin: "0 auto", padding: "120px 32px" }}>
-      <div className="io" data-dir="up" style={{ maxWidth: 640 }}>
+      <div data-aos="fade-up" style={{ maxWidth: 640 }}>
         <span
           className="mono"
           style={{
@@ -58,7 +58,7 @@ export function HowItWorks() {
       <div style={{ display: "flex", flexDirection: "column", gap: 100, marginTop: 56 }}>
         {/* Step 01 */}
         <div className="step-block" style={stepGrid}>
-          <div className="io" data-dir="left">
+          <div data-aos="fade-right">
             <div className="mono" style={stepNum}>01</div>
             <h3 style={stepH3}>A position is monitored</h3>
             <p style={stepP}>
@@ -66,7 +66,7 @@ export function HowItWorks() {
               reading the live health factor straight from the chain.
             </p>
           </div>
-          <div className="io" data-dir="right">
+          <div data-aos="fade-left">
             <MockShell>
               <div style={MOCK_ROW}>
                 <span style={{ color: "var(--paper)", fontSize: 14, fontWeight: 500 }}>Aave · WETH/USDC</span>
@@ -82,7 +82,7 @@ export function HowItWorks() {
 
         {/* Step 02 */}
         <div className="step-block" style={stepGrid}>
-          <div className="io" data-dir="right" style={{ order: -1 }}>
+          <div data-aos="fade-left" style={{ order: -1 }}>
             <div className="mono" style={stepNum}>02</div>
             <h3 style={stepH3}>A threshold is configured</h3>
             <p style={stepP}>
@@ -90,7 +90,7 @@ export function HowItWorks() {
               and a defense is armed — never before.
             </p>
           </div>
-          <div className="io" data-dir="left">
+          <div data-aos="fade-right">
             <MockShell>
               <div style={{ color: "var(--paper)", display: "flex", justifyContent: "space-between", marginBottom: 10, fontSize: 13 }}>
                 <span>Trigger threshold</span>
@@ -109,7 +109,7 @@ export function HowItWorks() {
 
         {/* Step 03 */}
         <div className="step-block" style={stepGrid}>
-          <div className="io" data-dir="left">
+          <div data-aos="fade-right">
             <div className="mono" style={stepNum}>03</div>
             <h3 style={stepH3}>The guardian acts</h3>
             <p style={stepP}>
@@ -117,7 +117,7 @@ export function HowItWorks() {
               attestation of exactly what happened is recorded.
             </p>
           </div>
-          <div className="io" data-dir="right">
+          <div data-aos="fade-left">
             <MockShell>
               <span
                 className="mono"

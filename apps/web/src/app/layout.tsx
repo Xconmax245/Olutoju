@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { RevealProvider } from "@/components/RevealProvider";
+import { AOSProvider } from "@/components/AOSProvider";
 
 export const metadata: Metadata = {
   title: "Olutoju | Autonomous DeFi position guardian",
@@ -29,7 +30,9 @@ export default function RootLayout({
         />
       </head>
       <body>
-        <RevealProvider>{children}</RevealProvider>
+        <RevealProvider>
+          <AOSProvider>{children}</AOSProvider>
+        </RevealProvider>
       </body>
     </html>
   );
