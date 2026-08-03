@@ -31,10 +31,14 @@ Olutoju is built as a modern monorepo (using npm workspaces) and consists of thr
 ## ✨ Core Features
 
 - **Autonomous Defense**: Zero-latency monitoring and execution. When a vault enters the danger zone, Olutoju intervenes automatically.
-- **KeeperHub Integration**: Never broadcasts defensive transactions to the public mempool. Routes through KeeperHub for MEV protection and smart gas pricing.
-- **Cryptographic Attestations**: Every action taken by the agent is cryptographically signed, creating an unambiguous, auditable record containing the trigger condition, simulation results, and final tx hashes.
-- **Chaos Mode**: An integrated testing suite that allows operators to safely inject volatility and verify the agent's reaction times in real-time.
-- **Live Telemetry**: A beautiful Next.js dashboard featuring live metrics, dial meters, and real-time incident streaming.
+- **KeeperHub Integration**: Never broadcasts defensive transactions to the public mempool. Routes through KeeperHub Direct Execution for MEV protection and smart gas pricing (the agent never self-signs defensive txs).
+- **Multi-Step Defense Workflow**: A defense is an *escalating sequence* — `topUpCollateral` → `partialUnwind` → `pausePosition` — where each step is simulated through KeeperHub and only executed if the simulation passes. If a step fails simulation, the system transparently escalates to the next louder step (no silent same-call retries).
+- **Verifiable Incident Reports**: Every successful defense produces a structured, exportable report built from the full workflow decision path, anchored with a deterministic keccak256 digest + ECDSA signature. Anyone can verify it independently via `GET /api/attestation/:id/verify` — no server trust required.
+- **Outcome-Gated x402 Settlement**: The winning watcher is paid a bounty **only after** the incident report's attestation verifies AND the defensive tx receipt is confirmed on-chain with a `secured` final state. Payment is gated on proof, never on a claim. Bounty scales with threat severity and current gas conditions.
+- **Deterministic Chaos Mode**: One API call can degrade the position, **force the primary defense to fail simulation** (proving re-planning/escalation), and submit a **competing public-mempool transaction** so the private-routed KeeperHub defense can be shown winning the block-ordering race.
+- **Private-Routing Evidence**: Each report compares the private defense block vs. the public competitor block, producing concrete MEV/ordering-protection proof.
+- **Live Telemetry**: A Next.js dashboard streaming live metrics via SSE — now including `WORKFLOW_STEP`, `INCIDENT_REPORT`, and `SETTLEMENT_UPDATE` events.
+
 
 ---
 
@@ -141,10 +145,39 @@ Want to see Olutoju in action?
 1. Open the Web Dashboard at `http://localhost:3000/dashboard`.
 2. Click the **"Trigger Chaos"** button on the UI (or hit the `/api/chaos-mode/trigger` endpoint).
 3. Watch as the Health Factor drops to `1.05`.
-4. Observe the Agent immediately detecting the drop, simulating the defense, executing it via KeeperHub, and restoring the Health Factor to `1.50`.
-5. View the resulting incident log and Cryptographic Attestation in real-time.
+4. Observe the Agent immediately detecting the drop, running the escalating **defense workflow** (simulate → execute each step) via KeeperHub, and restoring the Health Factor.
+5. View the resulting incident log and verifiable Incident Report in real-time.
+
+### Deterministic "hard mode" chaos
+
+The chaos endpoint accepts flags that make the demo spectacular **and** reproducible:
+
+```bash
+curl -X POST http://localhost:4000/api/chaos-mode/trigger \
+  -H "Content-Type: application/json" \
+  -d '{ "forcePrimaryFailure": true, "injectPublicCompetitor": true }'
+```
+
+- `forcePrimaryFailure: true` — bricks the primary defense (`topUpCollateral`) so its simulation fails and the agent must **escalate** to `partialUnwind` (proves genuine re-planning, not a silent retry).
+- `injectPublicCompetitor: true` — fires a competing **public-mempool** transaction so the incident report can prove the KeeperHub **private-routed** defense landed in an equal-or-earlier block.
+
+### Verifying an Incident Report
+
+Every successful defense writes a signed report to `apps/agent/data/attestations/<incidentId>.json`. Verify it independently:
+
+```bash
+# Server-side convenience verifier
+curl http://localhost:4000/api/attestation/<incidentId>/verify
+```
+
+The response reports whether the keccak256 digest matches and whether the recovered ECDSA signer equals the claimed `verifier_pubkey`. You can reproduce this entirely offline with `verifyIncidentReport()` in `apps/agent/src/incident-report.ts` — no trust in our server required.
+
+### x402 outcome-gated bounty (optional)
+
+Set `X402_ASSET`, `X402_PAYER_KEY`, and `X402_PAYOUT_ADDRESS` in `apps/agent/.env` to enable settlement. When configured, the winning watcher is paid a bounty (scaled by severity + gas) **only after** three gates pass: the attestation verifies, the defensive tx receipt is confirmed on-chain, and the final state is `secured`.
 
 ---
+
 
 ## 🤝 Contributing
 Contributions, issues, and feature requests are welcome. Feel free to check the issues page if you want to contribute.
