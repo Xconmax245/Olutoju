@@ -77,6 +77,7 @@ export function MeshPanel() {
   const [workflows, setWorkflows] = useState<WorkflowsResponse | null>(null);
   const [tools, setTools] = useState<McpToolsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
 
   const load = React.useCallback(async () => {
     try {
@@ -117,7 +118,18 @@ export function MeshPanel() {
 
   return (
     <section style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-      {/* Watcher fleet + latest race */}
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <button 
+          onClick={() => setExpanded(!expanded)} 
+          style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--muted)", fontSize: 11, background: "none", border: "none", cursor: "pointer", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.05em" }}
+        >
+          {expanded ? "▼" : "▶"} Advanced: Sentinel Mesh Telemetry
+        </button>
+      </div>
+
+      {expanded && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 24, opacity: expanded ? 1 : 0, transition: "opacity 0.2s ease-in-out" }}>
+          {/* Watcher fleet + latest race */}
       <div style={{ ...card, background: "var(--ink)", borderColor: "var(--ink-line)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
           <h2 style={{ ...heading, color: "var(--muted-on-dark)", margin: 0 }}>Sentinel mesh</h2>
@@ -198,8 +210,8 @@ export function MeshPanel() {
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{wf.name ?? wf.slug}</div>
                   <div className="mono" style={{ color: "var(--muted)", fontSize: 11 }}>{wf.slug}</div>
                 </div>
-                <span style={pill(wf.source === "keeperhub" ? "var(--ink)" : "var(--muted)", wf.source === "keeperhub" ? "var(--lime-bg)" : "var(--ink-soft)")}>
-                  {wf.source ?? "local"}{wf.verified ? " ✓" : ""}
+                <span style={pill((wf.source ?? workflows?.source) === "keeperhub" ? "var(--ink)" : "var(--muted)", (wf.source ?? workflows?.source) === "keeperhub" ? "var(--lime-bg)" : "var(--ink-soft)")}>
+                  {wf.source ?? workflows?.source ?? "local"}{wf.verified ? " ✓" : ""}
                 </span>
               </div>
             ))}
@@ -234,6 +246,8 @@ export function MeshPanel() {
       </div>
 
       {error && <div className="mono" style={{ color: "var(--coral)", fontSize: 12 }}>{error}</div>}
+        </div>
+      )}
     </section>
   );
 }

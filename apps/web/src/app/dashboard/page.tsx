@@ -222,19 +222,24 @@ export default function Dashboard() {
                 {status?.lastCheckedAt ? relativeTime(status.lastCheckedAt) : "—"}
               </span>
             </div>
-            <div style={{ display: "flex", justifyContent: "center" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 48, marginTop: 10, paddingBottom: 10 }}>
               <DialMeter
                 value={status?.healthFactor || "—"}
                 unit="Health factor"
                 fraction={status ? hfToFraction(hf) : undefined}
                 strokeColor={danger ? "var(--coral)" : "var(--lime)"}
-                size={240}
+                size={200}
               />
-            </div>
-            <div style={{ display: "flex", justifyContent: "center", gap: 20, marginTop: 24, color: "var(--muted-on-dark)", fontSize: 13 }}>
-              <span>Threshold <b style={{ color: "var(--paper)" }}>1.20</b></span>
-              <span style={{ opacity: 0.4 }}>•</span>
-              <span>Settled via <b style={{ color: "var(--paper)" }}>KeeperHub</b></span>
+              <div style={{ display: "flex", flexDirection: "column", gap: 24, color: "var(--muted-on-dark)", fontSize: 13 }}>
+                <div>
+                  <div style={{ marginBottom: 6, opacity: 0.8 }}>Threshold</div>
+                  <div className="mono" style={{ color: "var(--paper)", fontSize: 16 }}>1.20</div>
+                </div>
+                <div>
+                  <div style={{ marginBottom: 6, opacity: 0.8 }}>Settled via</div>
+                  <div className="mono" style={{ color: "var(--paper)", fontSize: 16 }}>KeeperHub</div>
+                </div>
+              </div>
             </div>
           </section>
 
@@ -301,22 +306,22 @@ export default function Dashboard() {
                 const o = OUTCOME[incident.outcome];
                 return (
                   <div key={incident.id} style={{ background: "var(--ink-card)", border: "1px solid var(--ink-line)", borderRadius: 16, padding: 18 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
                       <div>
-                        <div style={{ color: "var(--paper)", fontWeight: 600, fontSize: 14, marginBottom: 6 }}>{incident.triggerCondition}</div>
+                        <div style={{ color: "var(--paper)", fontWeight: 600, fontSize: 14, marginBottom: 8 }}>{incident.triggerCondition}</div>
                         <span className="mono" style={{ color: o.color, background: o.bg, borderRadius: 100, padding: "4px 10px", fontSize: 11 }}>{o.label}</span>
                       </div>
                       <span className="mono" style={{ color: "var(--muted-on-dark)", fontSize: 11, whiteSpace: "nowrap" }}>{clockTime(incident.timestamp)}</span>
                     </div>
-                    <div style={{ color: "var(--muted-on-dark)", fontSize: 13, lineHeight: 1.5 }}>
+                    <div style={{ color: "var(--muted-on-dark)", fontSize: 13, lineHeight: 1.5, marginBottom: 8 }}>
                       <b style={{ color: "var(--paper)" }}>Action:</b> {incident.actionTaken}
                     </div>
                     {incident.txHash && (
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12 }}>
-                        <a href={`https://sepolia.basescan.org/tx/${incident.txHash}`} target="_blank" rel="noreferrer" className="mono" style={{ color: "var(--peri)", fontSize: 12 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 16, opacity: 0.7 }}>
+                        <a href={`https://sepolia.basescan.org/tx/${incident.txHash}`} target="_blank" rel="noreferrer" className="mono" style={{ color: "var(--muted-on-dark)", fontSize: 10, textDecoration: "none" }}>
                           {shortHash(incident.txHash)} ↗
                         </a>
-                        {incident.gasUsed && <span className="mono" style={{ color: "var(--muted-on-dark)", fontSize: 11 }}>Gas {incident.gasUsed}</span>}
+                        {incident.gasUsed && <span className="mono" style={{ color: "var(--muted-on-dark)", fontSize: 10 }}>Gas {incident.gasUsed}</span>}
                       </div>
                     )}
                     {incident.outcome === "success" && (
@@ -423,6 +428,17 @@ function SparklineChart({ data, timeframe }: { data: HistoryPoint[], timeframe: 
     : 60 * 60 * 1000;
   const minTime = now - cutoffMs;
   const maxTime = now;
+
+  const oldestDataTime = Math.min(...data.map(d => new Date(d.timestamp).getTime()));
+  const dataSpanRatio = (now - oldestDataTime) / cutoffMs;
+
+  if (dataSpanRatio < 0.1 && timeframe !== "Hour") {
+    return (
+      <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted-on-dark)", fontSize: 13, border: "1px dashed var(--paper-line)", borderRadius: 14 }}>
+        Not enough history yet for the {timeframe} view.
+      </div>
+    );
+  }
 
   const points = data.map((d, i) => {
     let ratio = (new Date(d.timestamp).getTime() - minTime) / (maxTime - minTime);
