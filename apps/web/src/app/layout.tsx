@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import { RevealProvider } from "@/components/RevealProvider";
 import { AOSProvider } from "@/components/AOSProvider";
 
 export const metadata: Metadata = {
@@ -30,9 +29,7 @@ export default function RootLayout({
         />
       </head>
       <body>
-        <RevealProvider>
-          <AOSProvider>{children}</AOSProvider>
-        </RevealProvider>
+        <AOSProvider>{children}</AOSProvider>
       </body>
     </html>
   );
