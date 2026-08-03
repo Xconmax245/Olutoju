@@ -6,35 +6,47 @@ import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
 import { KeeperHubClient, KeeperHubError } from './keeperhub';
+import { runDefenseWorkflow, DEFAULT_DEFENSE_WORKFLOW } from './workflows/defense-workflow';
+import { buildIncidentReport, verifyIncidentReport, IncidentReport, IncidentTrigger } from './incident-report';
+import { settleX402, computeAdaptiveBounty, X402Settlement } from './x402';
+import { runChaos, buildPrivateRouteEvidence } from './chaos/orchestrator';
+import { classify, MockVaultAdapter } from './detection';
 dotenv.config();
 
 // Contract ABI (just the pieces we need) — ethers human-readable form
 const MockVaultABI = [
   "function healthFactor() view returns (uint256)",
+  "function paused() view returns (bool)",
   "function triggerChaos() external",
+  "function setBlockPrimaryDefense(bool blocked) external",
   "function topUpCollateral() external",
+  "function partialUnwind() external",
+  "function pausePosition() external",
   "event HealthFactorDegraded(uint256 newHealthFactor)",
   "event CollateralToppedUp(uint256 newHealthFactor)"
 ];
 
 // Standard JSON ABI — KeeperHub's Direct Execution API requires this format
-// (it rejects ethers' human-readable strings). Only the write fns are needed.
+// (it rejects ethers' human-readable strings). All defense write fns are needed.
 const MockVaultJsonABI = [
-  {
-    type: "function",
-    name: "triggerChaos",
-    stateMutability: "nonpayable",
-    inputs: [],
-    outputs: [],
-  },
-  {
-    type: "function",
-    name: "topUpCollateral",
-    stateMutability: "nonpayable",
-    inputs: [],
-    outputs: [],
-  },
+  { type: "function", name: "triggerChaos", stateMutability: "nonpayable", inputs: [], outputs: [] },
+  { type: "function", name: "topUpCollateral", stateMutability: "nonpayable", inputs: [], outputs: [] },
+  { type: "function", name: "partialUnwind", stateMutability: "nonpayable", inputs: [], outputs: [] },
+  { type: "function", name: "pausePosition", stateMutability: "nonpayable", inputs: [], outputs: [] },
 ];
+
+// Watcher identity (mesh): this guardian's framework + signing address.
+const WATCHER = {
+  id: process.env.WATCHER_ID || "guardian-node-1",
+  framework: process.env.WATCHER_FRAMEWORK || "raw-node",
+};
+
+// x402 demo settlement config (optional — only settles if fully configured).
+const X402_ASSET = process.env.X402_ASSET;            // test USDC ERC-20 address
+const X402_PAYER_KEY = process.env.X402_PAYER_KEY;    // insurance-pool/escrow signer
+const X402_PAYTO = process.env.X402_PAYOUT_ADDRESS;   // winning watcher payout address
+const X402_BASE_USDC = Number(process.env.X402_BASE_USDC || 5);
+
 
 const app = express();
 app.use(cors());
@@ -320,86 +332,74 @@ async function checkPosition() {
   }
 }
 
+// Pending chaos context (private-route competitor) keyed by position id.
+const pendingChaos = new Map<string, { publicCompetitorTxHash?: string; forcedPrimaryFailure?: boolean; gasGwei?: string }>();
+
 async function defendPosition(position: Position, contract: ethers.Contract, hf: string) {
-  console.log(`⚠️ Danger detected on ${position.label}! HF=${hf}. Triggering defense...`);
+  console.log(`⚠️ Danger detected on ${position.label}! HF=${hf}. Triggering escalating defense workflow...`);
   isIntervening = true;
   currentStatus.bannerMessage = `Intervention initiated via KeeperHub for ${position.label}...`;
   streamEmitter.emit('status', currentStatus);
 
   const incidentId = `inc_${Date.now()}`;
+  const detectedAt = new Date().toISOString();
+  const chaosCtx = pendingChaos.get(position.id) || {};
 
-  // Step 1: SIMULATE the primary strategy through KeeperHub (dry-run)
-  const sim = await simulateKeeperHub(position.address, 'topUpCollateral');
+  // ---- Run the multi-step KeeperHub defense workflow (simulate->execute each) ----
+  const run = await runDefenseWorkflow({
+    keeperhub,
+    contractAddress: position.address,
+    chainId: CHAIN_ID,
+    abi: MockVaultJsonABI,
+    steps: DEFAULT_DEFENSE_WORKFLOW,
+    log: (m) => {
+      console.log(m);
+      streamEmitter.emit('workflow', { incidentId, positionId: position.id, message: m, at: new Date().toISOString() });
+    },
+  });
 
-  let outcome: Incident['outcome'] = 'reverted';
-  let actionTaken = "Top-up Collateral via KeeperHub";
-  let fallbackUsed = false;
-  let txHash: string | undefined;
-  let blockNumber: number | undefined;
-  let gasUsed: string | undefined;
+  const winning = run.winningStep;
+  const outcome: Incident['outcome'] = run.outcome === 'success' ? 'success' : 'reverted';
+  let txHash = winning?.txHash;
+  let blockNumber = winning?.blockNumber;
+  let gasUsed = winning?.gasUsed;
 
-  try {
-    if (sim.ok) {
-      // Step 2: EXECUTE through KeeperHub Direct Execution (org wallet signs, private routing)
-      const exec = await executeKeeperHub(position.address, 'topUpCollateral');
-      txHash = exec.txHash;
-      blockNumber = exec.blockNumber;
-      gasUsed = exec.gasUsed;
-      outcome = 'success';
-      currentStatus.bannerMessage = `Defense successful. ${position.label} secured.`;
-    } else {
-      // Step 3: FALLBACK strategy — partial unwind / second defense path
-      console.warn(`[AGENT] Primary strategy failed simulation (${sim.reason}). Attempting fallback...`);
-      fallbackUsed = true;
-      actionTaken = "Fallback: forced top-up via second execution path";
-      try {
-        const exec = await executeKeeperHub(position.address, 'topUpCollateral');
-        txHash = exec.txHash;
-        blockNumber = exec.blockNumber;
-        gasUsed = exec.gasUsed;
-        outcome = 'success';
-        currentStatus.bannerMessage = `Fallback defense successful. ${position.label} secured.`;
-      } catch (fallbackErr: any) {
-        currentStatus.bannerMessage = `Defense failed for ${position.label}!`;
-        outcome = 'reverted';
-      }
-    }
-  } catch (err: any) {
-    console.error("Defense failed:", err);
-    currentStatus.bannerMessage = `Defense failed for ${position.label}!`;
-    outcome = 'reverted';
-  }
-
-  // Read final on-chain state for the attestation
+  // Read final on-chain state for the report
   let finalHF: string = hf;
   try {
     finalHF = (Number(await contract.healthFactor()) / 100).toFixed(2);
   } catch {}
 
-  // KeeperHub may not always return a block number; backfill from the receipt so
-  // the attestation is anchored to a concrete block.
+  // Backfill block number from the receipt so the report is block-anchored.
   if (outcome === 'success' && txHash && blockNumber === undefined) {
     try {
       const receipt = await provider.getTransactionReceipt(txHash);
       if (receipt) {
         blockNumber = receipt.blockNumber;
         if (!gasUsed) gasUsed = receipt.gasUsed?.toString();
+        if (winning) winning.blockNumber = receipt.blockNumber;
       }
     } catch (err: any) {
       console.warn(`[AGENT] Could not backfill block number for ${txHash}:`, err?.message);
     }
   }
 
+  currentStatus.bannerMessage = outcome === 'success'
+    ? `Defense successful (${winning?.label}). ${position.label} secured.`
+    : `Defense workflow exhausted for ${position.label}!`;
+
+  const firstSimReverted = run.steps.length > 0 && !run.steps[0].simulationPassed;
+
   const incident: Incident = {
     id: incidentId,
     positionId: position.id,
     positionLabel: position.label,
-    timestamp: new Date().toISOString(),
+    timestamp: detectedAt,
     triggerCondition: `Health Factor < ${THRESHOLD.toFixed(2)} (was ${hf})`,
     simulationPerformed: true,
-    simulationReverted: !sim.ok,
-    actionTaken,
-    fallbackUsed,
+    simulationReverted: firstSimReverted,
+    actionTaken: winning ? `${winning.label} via KeeperHub` : 'Workflow exhausted (no step landed)',
+    fallbackUsed: !!winning && winning.id !== DEFAULT_DEFENSE_WORKFLOW[0].id,
     outcome,
     txHash,
     blockNumber,
@@ -409,36 +409,68 @@ async function defendPosition(position: Position, contract: ethers.Contract, hf:
   incidents.unshift(incident);
   saveJson(INCIDENTS_FILE, incidents);
 
-  // Cryptographic Attestation — richer payload: trigger, simulation result, final state.
-  // Require a real tx hash; block number is best-effort (defaults to 0 if unknown).
+  // ---- Build the private-routing evidence (§1.7) ----
+  const privateRouting = await buildPrivateRouteEvidence({
+    provider,
+    defenseTxHash: txHash,
+    defenseBlockNumber: blockNumber,
+    publicCompetitorTxHash: chaosCtx.publicCompetitorTxHash,
+  });
+
+  // ---- Build the structured, verifiable incident report (P0.3 / §3.5) ----
+  const trigger: IncidentTrigger = {
+    positionId: position.id,
+    positionLabel: position.label,
+    protocol: 'MockVault',
+    threatType: 'health_factor_drop',
+    healthFactor: hf,
+    threshold: THRESHOLD.toFixed(2),
+    detectedAt,
+  };
+
+  let report: IncidentReport | undefined;
   if (outcome === 'success' && txHash) {
-    const attestationPayload: Omit<Attestation, 'signature' | 'verifier_pubkey' | 'payload'> = {
-      incident_id: incidentId,
-      position_id: position.id,
-      chain_id: CHAIN_ID,
-      trigger: { health_factor: hf, threshold: THRESHOLD.toFixed(2) },
-      simulation_result: {
-        primary: sim.ok ? "passed" : `reverted: ${sim.reason}`,
-        fallback_used: fallbackUsed ? "true" : "false"
-      },
-      tx_hash: txHash,
-      block_number: blockNumber ?? 0,
-      final_state: { health_factor: finalHF },
-      timestamp: incident.timestamp,
-    };
+    report = await buildIncidentReport({
+      incidentId,
+      chainId: CHAIN_ID,
+      contractAddress: position.address,
+      trigger,
+      run,
+      finalHealthFactor: finalHF,
+      watcher: { id: WATCHER.id, framework: WATCHER.framework, address: wallet.address },
+      privateRouting,
+      signer: wallet,
+    });
 
-    const payload = JSON.stringify(attestationPayload);
-    const signature = await wallet.signMessage(payload);
+    // ---- x402 outcome-gated settlement (P0.2 / §3.1) ----
+    let settlement: X402Settlement | undefined;
+    if (X402_ASSET && X402_PAYER_KEY && X402_PAYTO) {
+      try {
+        const severity = Number(finalHF) < 1.02 ? 'critical' : Number(hf) < 1.06 ? 'high' : 'medium';
+        const amount = await computeAdaptiveBounty({ provider, baseUsdc: X402_BASE_USDC, severity });
+        const payerSigner = new ethers.Wallet(X402_PAYER_KEY, provider);
+        settlement = await settleX402({
+          report,
+          challenge: { amount, asset: X402_ASSET, payTo: X402_PAYTO, nonce: incidentId },
+          provider,
+          payerSigner,
+          log: (m) => { console.log(m); streamEmitter.emit('settlement', { incidentId, message: m }); },
+        });
+      } catch (err: any) {
+        console.error('[x402] Settlement error:', err?.message);
+      }
+    } else {
+      console.log('[x402] Settlement skipped (X402_ASSET/X402_PAYER_KEY/X402_PAYOUT_ADDRESS not configured).');
+    }
 
-    const attestation: Attestation = {
-      ...attestationPayload,
-      payload,
-      verifier_pubkey: wallet.address,
-      signature
-    };
-
-    saveJson(path.join(ATTESTATIONS_DIR, `${incidentId}.json`), attestation);
+    // Persist the full report (report + settlement) alongside legacy attestation.
+    const enriched = { ...report, settlement: settlement || { settled: false, reason: 'not_configured' } };
+    saveJson(path.join(ATTESTATIONS_DIR, `${incidentId}.json`), enriched);
+    streamEmitter.emit('report', enriched);
   }
+
+  // Clear the chaos context now that this incident is handled.
+  pendingChaos.delete(position.id);
 
   streamEmitter.emit('incident', incident);
   streamEmitter.emit('status', currentStatus);
@@ -449,6 +481,7 @@ async function defendPosition(position: Position, contract: ethers.Contract, hf:
     streamEmitter.emit('status', currentStatus);
   }, 5000);
 }
+
 
 // ---------------------------------------------------------------------------
 // Startup & polling
@@ -519,6 +552,32 @@ app.get('/api/attestation/:id', (req, res) => {
   return res.status(404).json({ error: "Attestation not found" });
 });
 
+// Independently verify a stored incident report's cryptographic attestation.
+// Anyone can call this (or run verifyIncidentReport locally) — no server trust.
+app.get('/api/attestation/:id/verify', (req, res) => {
+  const file = path.join(ATTESTATIONS_DIR, `${req.params.id}.json`);
+  if (!fs.existsSync(file)) {
+    return res.status(404).json({ error: "Attestation not found" });
+  }
+  try {
+    const report = JSON.parse(fs.readFileSync(file, 'utf8'));
+    // Only the v1 structured reports carry a `digest`; older ones are skipped.
+    if (!report.digest || !report.signature) {
+      return res.status(422).json({ error: "Report is not a verifiable v1 attestation." });
+    }
+    const result = verifyIncidentReport(report as IncidentReport);
+    return res.json({
+      incidentId: report.incidentId,
+      ...result,
+      verifier_pubkey: report.verifier_pubkey,
+      settlement: report.settlement ?? null,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || "verification error" });
+  }
+});
+
+
 // Simple in-memory rate limiter for the chaos endpoint (P1 item 13)
 const chaosHits: number[] = [];
 const CHAOS_WINDOW_MS = 60_000;
@@ -546,22 +605,47 @@ app.post('/api/chaos-mode/trigger', async (req, res) => {
     // Chaos mode is a DEMO action against our own MockVault — it degrades the
     // monitored position so the agent's KeeperHub defense can be observed. This
     // is not a defensive tx, so it uses the demo treasury wallet directly.
+    const position = getActivePosition();
     const contract = getActiveContract();
-    // Simulate first (eth_call) so we never blindly submit
-    try {
-      await contract.triggerChaos.estimateGas();
-    } catch (simErr: any) {
-      return res.status(500).json({ error: `Simulation of chaos trigger failed: ${simErr?.reason || simErr?.message}` });
-    }
-    const tx = await contract.triggerChaos();
-    await tx.wait();
+
+    // Optional deterministic failure injection: force the primary defense step
+    // to revert so the workflow must escalate (proves re-planning).
+    const forcePrimaryFailure = req.body?.forcePrimaryFailure === true;
+    const injectPublicCompetitor = req.body?.injectPublicCompetitor === true;
+
+    // Run the chaos orchestrator: optionally brick primary defense, degrade HF,
+    // and fire a competing PUBLIC-mempool tx so private routing can be proven.
+    const chaosResult = await runChaos({
+      vault: contract,
+      chaosWallet: wallet,
+      provider,
+      options: { forcePrimaryFailure, injectPublicCompetitor },
+      log: (m) => console.log(m),
+    });
+
+    // Remember the chaos context for the defense to consume (private-route proof).
+    pendingChaos.set(position.id, {
+      publicCompetitorTxHash: chaosResult.publicCompetitorTxHash,
+      forcedPrimaryFailure: chaosResult.primaryFailureForced,
+      gasGwei: chaosResult.gasGwei,
+    });
+
     // Kick the next poll cycle immediately so the degradation is noticed fast
     setTimeout(checkPosition, 200);
-    res.json({ success: true, txHash: tx.hash, positionId: getActivePositionId() });
+
+    res.json({
+      success: true,
+      txHash: chaosResult.chaosTxHash,
+      positionId: position.id,
+      forcePrimaryFailure: chaosResult.primaryFailureForced,
+      publicCompetitorTxHash: chaosResult.publicCompetitorTxHash,
+      gasGwei: chaosResult.gasGwei,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err?.reason || err?.message || "Chaos trigger failed" });
   }
 });
+
 
 app.get('/api/stream', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -575,6 +659,9 @@ app.get('/api/stream', (req, res) => {
 
   const onStatus = (data: any) => sendEvent('STATUS_UPDATE', data);
   const onIncident = (data: any) => sendEvent('INCIDENT_CREATED', data);
+  const onWorkflow = (data: any) => sendEvent('WORKFLOW_STEP', data);
+  const onReport = (data: any) => sendEvent('INCIDENT_REPORT', data);
+  const onSettlement = (data: any) => sendEvent('SETTLEMENT_UPDATE', data);
 
   // Heartbeat keeps proxies from dropping long-lived connections
   const heartbeat = setInterval(() => {
@@ -583,13 +670,20 @@ app.get('/api/stream', (req, res) => {
 
   streamEmitter.on('status', onStatus);
   streamEmitter.on('incident', onIncident);
+  streamEmitter.on('workflow', onWorkflow);
+  streamEmitter.on('report', onReport);
+  streamEmitter.on('settlement', onSettlement);
 
   req.on('close', () => {
     clearInterval(heartbeat);
     streamEmitter.off('status', onStatus);
     streamEmitter.off('incident', onIncident);
+    streamEmitter.off('workflow', onWorkflow);
+    streamEmitter.off('report', onReport);
+    streamEmitter.off('settlement', onSettlement);
   });
 });
+
 
 process.on('unhandledRejection', (reason) => {
   console.error('[AGENT] Unhandled rejection:', reason);
