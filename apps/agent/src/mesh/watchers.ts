@@ -135,12 +135,12 @@ export class Watcher {
 }
 
 /**
- * Build the default mesh fleet from env (comma-separated ids optional) with
- * honest, reproducible defaults. Returns 3 heterogeneous watchers.
+ * Build the fleet's CONFIGS from env (shared by the in-process fleet and the
+ * worker-thread pool so both spawn the exact same heterogeneous watchers).
  */
-export function buildDefaultFleet(env: NodeJS.ProcessEnv): Watcher[] {
+export function buildFleetConfigs(env: NodeJS.ProcessEnv): WatcherConfig[] {
   const baseStake = env.WATCHER_STAKE || "1000000"; // 1 test-USDC (6 decimals)
-  const fleet: WatcherConfig[] = [
+  return [
     {
       id: env.WATCHER_ID || "guardian-node-1",
       framework: env.WATCHER_FRAMEWORK || "raw-node",
@@ -160,7 +160,14 @@ export function buildDefaultFleet(env: NodeJS.ProcessEnv): Watcher[] {
       stake: baseStake,
     },
   ];
-  return fleet.map((c) => new Watcher(c));
+}
+
+/**
+ * Build the default mesh fleet from env (comma-separated ids optional) with
+ * honest, reproducible defaults. Returns 3 heterogeneous watchers.
+ */
+export function buildDefaultFleet(env: NodeJS.ProcessEnv): Watcher[] {
+  return buildFleetConfigs(env).map((c) => new Watcher(c));
 }
 
 /** Derive a deterministic demo key from a watcher id (repeatable, non-secret). */

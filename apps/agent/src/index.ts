@@ -15,7 +15,8 @@ import { settleX402, computeAdaptiveBounty, X402Settlement } from './x402';
 import { runChaos, buildPrivateRouteEvidence } from './chaos/orchestrator';
 import { classify, MockVaultAdapter } from './detection';
 import { runRace, RaceResult } from './mesh/race-coordinator';
-import { buildDefaultFleet, Watcher } from './mesh/watchers';
+import { buildDefaultFleet, buildFleetConfigs, Watcher } from './mesh/watchers';
+import { WatcherPool } from './mesh/watcher-pool';
 import { MppRetainer, buildRetainerFromEnv, RetainerSettlement } from './mpp';
 dotenv.config();
 
@@ -219,6 +220,16 @@ const keeperhub = new KeeperHubClient(KEEPERHUB_API_KEY);
 const MESH_ENABLED = process.env.MESH_ENABLED !== 'false';
 const mcpClient = new KeeperHubMcpClient(KEEPERHUB_API_KEY);
 const fleet = buildDefaultFleet(process.env);
+// Sentinel Mesh pool (§2.1): spawns each watcher in its OWN worker thread
+// (independent V8 isolate + key + message loop) when MESH_WORKERS !== 'false',
+// falling back to the honest in-process fleet otherwise. Built once at startup
+// so worker threads are reused across incidents.
+const watcherPool = new WatcherPool({
+  configs: buildFleetConfigs(process.env),
+  apiKey: KEEPERHUB_API_KEY,
+  mcp: mcpClient,
+  log: (m: string) => console.log(m),
+});
 // Retainer (MPP, §1.5/§3.4) — optional; only settles when configured.
 const retainer = buildRetainerFromEnv(process.env);
 let lastRace: RaceResult | null = null;
@@ -380,16 +391,16 @@ async function defendPosition(position: Position, contract: ethers.Contract, hf:
   let winnerAction: { functionName: string; label: string } | undefined;
   if (MESH_ENABLED) {
     try {
-      const proposals = await Promise.all(
-        fleet.map((w: Watcher) => w.propose({
-          healthFactor: Number(hf),
-          threshold: THRESHOLD,
-          primaryBlocked,
-          mcp: mcpClient,
-          log: (m) => { console.log(m); streamEmitter.emit('workflow', { incidentId, positionId: position.id, message: m, at: new Date().toISOString() }); },
-        }))
-      );
-      streamEmitter.emit('workflow', { incidentId, positionId: position.id, message: `[Mesh] ${proposals.length} watchers proposed. Racing...`, at: new Date().toISOString() });
+      // Fan the incident out to the watcher pool. In worker mode each watcher
+      // detects + signs INDEPENDENTLY in its own thread; inline mode is an
+      // honest same-process fallback. `batch.mode` records which actually ran.
+      const batch = await watcherPool.propose({
+        healthFactor: Number(hf),
+        threshold: THRESHOLD,
+        primaryBlocked,
+      });
+      const proposals = batch.proposals;
+      streamEmitter.emit('workflow', { incidentId, positionId: position.id, message: `[Mesh] ${proposals.length} watchers proposed (${batch.mode} mode${batch.readyWatchers.length ? `, ${batch.readyWatchers.length} independent workers` : ''}). Racing...`, at: new Date().toISOString() });
       race = await runRace({
         keeperhub,
         contractAddress: position.address,
