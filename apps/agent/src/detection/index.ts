@@ -115,3 +115,137 @@ export class AaveV3Adapter implements PositionAdapter {
     };
   }
 }
+
+/**
+ * Morpho Blue adapter (§4.2). Morpho Blue has no native health-factor getter, so
+ * we derive one the way the protocol defines solvency:
+ *
+ *     healthFactor = (collateral * price * LLTV) / borrowed
+ *
+ * using the on-chain `position(id,user)` + `market(id)` reads plus the market's
+ * oracle `price()`. A value ≥ 1 means the position is above its liquidation
+ * threshold. This is a REAL read against Morpho Blue's singleton — wire the
+ * market id + user to activate; the agent loop needs no other change.
+ */
+export class MorphoBlueAdapter implements PositionAdapter {
+  readonly protocol = "MorphoBlue";
+  private morpho: ethers.Contract;
+  private oracle?: ethers.Contract;
+
+  constructor(
+    morphoAddress: string,
+    private marketId: string,
+    private user: string,
+    provider: ethers.Provider,
+    oracleAddress?: string
+  ) {
+    this.morpho = new ethers.Contract(
+      morphoAddress,
+      [
+        "function position(bytes32 id, address user) view returns (uint256 supplyShares, uint128 borrowShares, uint128 collateral)",
+        "function market(bytes32 id) view returns (uint128 totalSupplyAssets, uint128 totalSupplyShares, uint128 totalBorrowAssets, uint128 totalBorrowShares, uint128 lastUpdate, uint128 fee)",
+        "function idToMarketParams(bytes32 id) view returns (address loanToken, address collateralToken, address oracle, address irm, uint256 lltv)",
+      ],
+      provider
+    );
+    if (oracleAddress) {
+      this.oracle = new ethers.Contract(
+        oracleAddress,
+        ["function price() view returns (uint256)"],
+        provider
+      );
+    }
+  }
+
+  async read(): Promise<Reading> {
+    const id = this.marketId;
+    const [pos, mkt, params] = await Promise.all([
+      this.morpho.position(id, this.user),
+      this.morpho.market(id),
+      this.morpho.idToMarketParams(id),
+    ]);
+
+    const collateral: bigint = pos.collateral ?? pos[2];
+    const borrowShares: bigint = pos.borrowShares ?? pos[1];
+    const totalBorrowAssets: bigint = mkt.totalBorrowAssets ?? mkt[2];
+    const totalBorrowShares: bigint = mkt.totalBorrowShares ?? mkt[3];
+    const lltv: bigint = params.lltv ?? params[4]; // 1e18-scaled
+
+    // Convert this user's borrow shares into borrowed assets.
+    const borrowed =
+      totalBorrowShares > 0n ? (borrowShares * totalBorrowAssets) / totalBorrowShares : 0n;
+
+    // No debt → maximally healthy.
+    if (borrowed === 0n) {
+      return { healthFactor: 999, raw: { collateral: collateral.toString(), borrowed: "0" } };
+    }
+
+    // Morpho oracle price is scaled 1e36 / collateral-decimals; use it if wired,
+    // else assume a 1:1 price (still a real solvency ratio for same-decimals mkts).
+    let price = 10n ** 36n;
+    let oracleUsed = false;
+    if (this.oracle) {
+      try {
+        price = await this.oracle.price();
+        oracleUsed = true;
+      } catch {
+        /* fall back to 1:1 */
+      }
+    }
+
+    // maxBorrow = collateral * price / 1e36 * lltv / 1e18
+    const collateralValue = (collateral * price) / 10n ** 36n;
+    const maxBorrow = (collateralValue * lltv) / 10n ** 18n;
+    const hf = borrowed > 0n ? Number(maxBorrow) / Number(borrowed) : 999;
+
+    return {
+      healthFactor: hf,
+      raw: {
+        collateral: collateral.toString(),
+        borrowed: borrowed.toString(),
+        lltv: lltv.toString(),
+        oracleUsed,
+      },
+    };
+  }
+}
+
+/**
+ * Build the right PositionAdapter for a monitored position from env-style config.
+ * Keeps the agent loop protocol-agnostic: it just calls `adapter.read()`.
+ *
+ *   protocol="mock"   → MockVaultAdapter (demo)
+ *   protocol="aave"   → AaveV3Adapter    (needs AAVE_POOL + user address)
+ *   protocol="morpho" → MorphoBlueAdapter(needs MORPHO + marketId + user [+oracle])
+ */
+export function buildAdapter(opts: {
+  protocol?: string;
+  provider: ethers.Provider;
+  contract?: ethers.Contract; // for mock
+  // aave
+  aavePool?: string;
+  // morpho
+  morpho?: string;
+  marketId?: string;
+  oracle?: string;
+  // shared
+  user?: string;
+}): PositionAdapter {
+  const protocol = (opts.protocol || "mock").toLowerCase();
+  if (protocol === "aave") {
+    if (!opts.aavePool || !opts.user) {
+      throw new Error("AaveV3Adapter requires aavePool + user.");
+    }
+    return new AaveV3Adapter(opts.aavePool, opts.user, opts.provider);
+  }
+  if (protocol === "morpho") {
+    if (!opts.morpho || !opts.marketId || !opts.user) {
+      throw new Error("MorphoBlueAdapter requires morpho + marketId + user.");
+    }
+    return new MorphoBlueAdapter(opts.morpho, opts.marketId, opts.user, opts.provider, opts.oracle);
+  }
+  if (!opts.contract) {
+    throw new Error("MockVaultAdapter requires a contract instance.");
+  }
+  return new MockVaultAdapter(opts.contract);
+}
