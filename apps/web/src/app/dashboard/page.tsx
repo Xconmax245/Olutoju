@@ -66,8 +66,9 @@ export default function Dashboard() {
     setIsTriggering(true);
     try {
       await api.triggerChaosMode();
-    } catch (e) {
-      console.error(e);
+      await handleForceCheck();
+    } catch (e: any) {
+      alert(e.message || "Failed to trigger chaos mode");
     }
     setTimeout(() => setIsTriggering(false), 1000);
   };
@@ -254,7 +255,7 @@ export default function Dashboard() {
               </div>
             </div>
             <div style={{ height: 130, width: "100%", position: "relative" }}>
-              <SparklineChart data={history} />
+              <SparklineChart data={history} timeframe={timeframe} />
             </div>
           </section>
 
@@ -402,7 +403,7 @@ function catmullRom2bezier(points: { x: number; y: number }[]) {
   return d;
 }
 
-function SparklineChart({ data }: { data: HistoryPoint[] }) {
+function SparklineChart({ data, timeframe }: { data: HistoryPoint[], timeframe: "Hour" | "Day" | "Week" }) {
   if (!data || data.length === 0)
     return (
       <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted)", fontSize: 12 }}>
@@ -416,8 +417,17 @@ function SparklineChart({ data }: { data: HistoryPoint[] }) {
   const w = 800;
   const h = 200;
 
+  const now = Date.now();
+  const cutoffMs = timeframe === 'Week' ? 7 * 24 * 60 * 60 * 1000
+    : timeframe === 'Day' ? 24 * 60 * 60 * 1000
+    : 60 * 60 * 1000;
+  const minTime = now - cutoffMs;
+  const maxTime = now;
+
   const points = data.map((d, i) => {
-    const x = (i / (data.length - 1)) * w;
+    let ratio = (new Date(d.timestamp).getTime() - minTime) / (maxTime - minTime);
+    ratio = Math.max(0, Math.min(1, ratio));
+    const x = ratio * w;
     const y = range === 0 ? h / 2 : h - ((d.value - min) / range) * h;
     return { x, y };
   });
