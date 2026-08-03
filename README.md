@@ -6,6 +6,25 @@ The system features real-time monitoring, cryptographic incident attestations, a
 
 ---
 
+## ✅ Verified On-Chain Proof
+
+The KeeperHub **Direct Execution** rail is verified with two real transactions on public Base Sepolia. KeeperHub's own organization wallet (`0x6331eb45...`) signed and routed both — the agent treasury wallet never signs defensive transactions.
+
+| # | tx hash | block | function | status |
+|---|---|---|---|---|
+| 1 | [`0x400d30e2...e63fa3`](https://sepolia.basescan.org/tx/0x400d30e2de6482247249829cfbfbe2a4bc906a82ced3b1a7bf0d2c8f22e63fa3) | [44974210](https://sepolia.basescan.org/block/44974210) | `topUpCollateral` | ✅ Success |
+| 2 | [`0x04dcac8b...39204`](https://sepolia.basescan.org/tx/0x04dcac8b6abc1ba45edaa916a89fbdcf98d811e964be7f514c7b01354ab39204) | [44979064](https://sepolia.basescan.org/block/44979064) | `topUpCollateral` | ✅ Success |
+
+**Contract (MockVault):** [`0x6f3A57f763e54dAED307433E86fa1AfE840c3f09`](https://sepolia.basescan.org/address/0x6f3A57f763e54dAED307433E86fa1AfE840c3f09) — deployed 2026-08-02, Base Sepolia (chain 84532).
+
+**What is and isn't claimed at this point:**
+- ✅ **KeeperHub Direct Execution** — verified. Both hashes show KeeperHub's execution wallet as `From`, not the agent treasury. `executionId: yhkreq0jd7nll5v78dswu` is a KeeperHub-issued identifier, not a local artefact.
+- ✅ **KeeperHub MCP `tools/list`** — verified. The agent calls `initialize` → `tools/list` against `https://app.keeperhub.com/mcp` at startup and logs the discovered tool names (visible at `GET /api/mcp/tools`).
+- ✅ **KeeperHub MCP `tools/call`** — implemented (P0.3). On every incident the MCP-native watcher calls `tools/list` then searches for a simulate/execute tool and makes a real `tools/call` round-trip. If the live server exposes a matching tool, the call result drives the action chosen; if not, the watcher logs all discovered tool names and falls back to local policy. Set `KEEPERHUB_MCP_SIMULATE_TOOL=<name>` to pin the exact tool name for your org.
+- ✅ **Signed attestation** — verified. Attestation `inc_1785726412321` (block 44979064) is signed at `0xe4cf2346C94d6Eb91d14FD4Ac63f85Fd3717c69c` and independently verifiable via `GET /api/attestation/inc_1785726412321/verify`.
+
+---
+
 ## 🏗️ Architecture
 
 Olutoju is built as a modern monorepo (using npm workspaces) and consists of three core applications:
@@ -297,21 +316,36 @@ The mesh is also surfaced **visually** in the operator dashboard (`/dashboard`):
 
 ## ✅ Live end-to-end proof
 
-The honest answer to "show a real `kh_` key + real tx hashes" is a runner that drives the **entire real path** against live infrastructure and writes a machine-checkable artifact — no hand-pasted hashes. From `apps/agent` with a real `.env`:
+Two real KeeperHub Direct Execution transactions are already on-chain and verifiable (see the **Verified On-Chain Proof** section at the top). The proof runner generates further artifacts on demand:
 
 ```bash
+cd apps/agent
 npm run proof
 ```
 
-This performs, in order, and records each result to `apps/agent/proofs/<timestamp>.json`:
+This drives the **entire real path** against live infrastructure and writes a machine-checkable artifact to `apps/agent/proofs/<timestamp>.json`:
 
-1. **MCP handshake** — `initialize` + `tools/list` against the live KeeperHub MCP endpoint (records the exact tool names discovered).
-2. **Workflow object** — ensures/creates the defense workflow object; records whether it came back `source: "keeperhub"` (live) or `"local"`.
+1. **MCP handshake** — `initialize` + `tools/list` against the live KeeperHub MCP endpoint. Records the exact tool names the live server exposes. *(Note: `tools/call` is not yet exercised by this runner — that gap is tracked as P0.3.)*
+2. **Workflow object** — ensures/creates the defense workflow object; records `source: "keeperhub"` (remote) or `"local"` honestly — never fakes a remote id.
 3. **Live read** — reads the monitored position's on-chain health factor.
-4. **Real execution** — simulates + executes one defense step through KeeperHub Direct Execution and captures the **real** `transactionHash` + explorer link.
-5. **Receipt anchor** — fetches the on-chain receipt (block number, status) for that hash, so the proof is block-anchored, not self-asserted.
+4. **Real execution** — simulates + executes one defense step through KeeperHub Direct Execution and captures the real `transactionHash` + explorer link. This is the path proven by the two tx hashes above.
+5. **Receipt anchor** — fetches the on-chain receipt (block number, status) so the proof is block-anchored, not self-asserted.
 
-The artifact is safe to commit/publish: it contains the tx hash, block, and explorer link but **never** the API key or any private key. See [`apps/agent/PROOFS.md`](apps/agent/PROOFS.md) for how to run it and how to read a published artifact.
+The artifact contains the tx hash, block, and explorer link but **never** the API key or any private key — safe to commit. See [`apps/agent/PROOFS.md`](apps/agent/PROOFS.md) for details.
+
+### Verifying an existing attestation
+
+Attestation `inc_1785726412321` (block 44979064) is already on disk at `apps/agent/data/attestations/inc_1785726412321.json`. Verify it without running the agent:
+
+```bash
+# Via the running agent
+curl http://localhost:4000/api/attestation/inc_1785726412321/verify
+
+# Offline — no server trust required
+npm run cli -- verify apps/agent/data/attestations/inc_1785726412321.json
+```
+
+The response confirms the keccak256 digest matches and the ECDSA signer equals `verifier_pubkey` (`0xe4cf2346C94d6Eb91d14FD4Ac63f85Fd3717c69c`).
 
 ---
 
