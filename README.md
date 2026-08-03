@@ -94,6 +94,42 @@ Olutoju is not just one watcher; it is a **mesh of independent, competing watche
 
 The security invariant is preserved end-to-end: **watchers detect, simulate, propose, and race — but never hold funds and never self-broadcast defenses.** All execution flows through KeeperHub.
 
+### Truly independent watcher processes
+
+The mesh is not "one function called three times in a single event loop." Each watcher boots inside its **own Node.js `worker_thread`** — a separate V8 isolate with its own key material and message loop (`src/mesh/watcher-pool.ts`, `src/mesh/watcher-worker.ts`). On an incident the pool fans the event out to every worker concurrently and collects each worker's **independently-signed** proposal, with a per-watcher timeout so a hung watcher can't stall the race. Provenance is honest: each proposal batch is tagged `mode: "worker" | "inline"`, and the `[Mesh]` log line reports how many independent workers actually booted. Set `MESH_WORKERS=false` to force the in-process fallback.
+
+### Real protocol adapters (not just MockVault)
+
+Detection is protocol-agnostic behind a `PositionAdapter` interface (`src/detection/index.ts`). Three real adapters ship:
+
+| `protocol` | Adapter | Live read |
+| --- | --- | --- |
+| `mock` | `MockVaultAdapter` | demo vault `healthFactor()` |
+| `aave` | `AaveV3Adapter` | Aave V3 Pool `getUserAccountData(user)` → 1e18 HF |
+| `morpho` | `MorphoBlueAdapter` | Morpho Blue `position`/`market`/`idToMarketParams` (+ oracle `price()`), deriving `HF = collateral·price·LLTV / borrowed` |
+
+`buildAdapter()` selects the right one from config, so the agent loop never changes when you point it at a real Aave or Morpho position.
+
+### Gas Sponsorship (§1.8)
+
+Defensive executions carry `sponsorGas` so KeeperHub's engine (org paymaster) covers gas — a watcher with an **empty wallet** can still defend. It's on by default and toggled with `GAS_SPONSORED=false` (or `--no-sponsor` on the CLI).
+
+### Sentinel CLI
+
+A framework-agnostic operator surface over the same integrations the agent uses (`src/cli.ts`). Run from `apps/agent`:
+
+```bash
+npm run cli -- mcp:tools                         # discover KeeperHub tools over MCP
+npm run cli -- workflows:list                    # list workflow objects (MCP → REST → local)
+npm run cli -- workflows:create --vault 0x...     # ensure a defense workflow object
+npm run cli -- mesh:race --hf 1.03 --vault 0x...  # run a real watcher race + rank via simulation
+npm run cli -- read --protocol aave --pool 0x... --user 0x...   # read a live position's HF
+npm run cli -- execute --vault 0x... --fn topUpCollateral       # gas-sponsored Direct Execution
+npm run cli -- verify apps/agent/data/attestations/<id>.json     # verify an attestation offline
+```
+
+Like the agent, the CLI never signs or broadcasts a defense itself — execution always flows through KeeperHub.
+
 ---
 
 
@@ -255,6 +291,29 @@ During an incident the SSE stream (`GET /api/stream`) emits a `MESH_RACE` event 
 
 To enable the standing retainer, set `MPP_ASSET`, `MPP_PAYOUT_ADDRESS`, and `MPP_AMOUNT_PER_PERIOD` in `apps/agent/.env`. Each settled period records whether it was actually **charged** on-chain or merely **accrued** (when no payer is configured) — provenance is never faked.
 
+The mesh is also surfaced **visually** in the operator dashboard (`/dashboard`): the **Sentinel mesh** panel renders the live watcher fleet and the most recent race (each proposal, the ranked winner, and any slashing), the **Workflow objects** panel lists the registered KeeperHub workflow objects with honest `keeperhub` vs `local` provenance badges, and the **KeeperHub MCP tools** panel shows exactly which tools were discovered over MCP. All three refresh on an interval and on live `MESH_RACE` SSE events.
+
 ---
+
+## ✅ Live end-to-end proof
+
+The honest answer to "show a real `kh_` key + real tx hashes" is a runner that drives the **entire real path** against live infrastructure and writes a machine-checkable artifact — no hand-pasted hashes. From `apps/agent` with a real `.env`:
+
+```bash
+npm run proof
+```
+
+This performs, in order, and records each result to `apps/agent/proofs/<timestamp>.json`:
+
+1. **MCP handshake** — `initialize` + `tools/list` against the live KeeperHub MCP endpoint (records the exact tool names discovered).
+2. **Workflow object** — ensures/creates the defense workflow object; records whether it came back `source: "keeperhub"` (live) or `"local"`.
+3. **Live read** — reads the monitored position's on-chain health factor.
+4. **Real execution** — simulates + executes one defense step through KeeperHub Direct Execution and captures the **real** `transactionHash` + explorer link.
+5. **Receipt anchor** — fetches the on-chain receipt (block number, status) for that hash, so the proof is block-anchored, not self-asserted.
+
+The artifact is safe to commit/publish: it contains the tx hash, block, and explorer link but **never** the API key or any private key. See [`apps/agent/PROOFS.md`](apps/agent/PROOFS.md) for how to run it and how to read a published artifact.
+
+---
+
 
 
