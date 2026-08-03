@@ -94,6 +94,13 @@ export interface RunDefenseWorkflowArgs {
   steps?: WorkflowStepDef[];
   /** Optional structured logger; defaults to console. */
   log?: (msg: string) => void;
+  /**
+   * Gas Sponsorship (§1.8). When true, the execution request carries
+   * `sponsorGas`, so KeeperHub's engine (org paymaster) covers gas for the
+   * defense tx — the agent wallet never needs to hold gas. Defaults to
+   * env GAS_SPONSORED !== 'false'.
+   */
+  sponsorGas?: boolean;
 }
 
 /**
@@ -105,6 +112,7 @@ export async function runDefenseWorkflow(args: RunDefenseWorkflowArgs): Promise<
   const { keeperhub, contractAddress, chainId, abi } = args;
   const log = args.log || ((m: string) => console.log(m));
   const steps = args.steps || DEFAULT_DEFENSE_WORKFLOW;
+  const sponsorGas = args.sponsorGas ?? (process.env.GAS_SPONSORED !== "false");
   const workflowId = `wf_${Date.now()}`;
   const runStartedAt = new Date().toISOString();
 
@@ -158,12 +166,14 @@ export async function runDefenseWorkflow(args: RunDefenseWorkflowArgs): Promise<
     // ---- 2. EXECUTE (Direct Execution — org wallet signs) -----------------
     try {
       log(`[Workflow ${workflowId}] Executing step "${step.label}" through KeeperHub Direct Execution...`);
+      log(`[Workflow ${workflowId}] sponsorGas=${sponsorGas}${sponsorGas ? " (org paymaster covers fees)" : ""}`);
       const exec = await keeperhub.executeContractCall({
         contractAddress,
         chainId,
         functionName: step.functionName,
         functionArgs: step.functionArgs ?? [],
         abi,
+        sponsorGas,
       });
       if (!exec.transactionHash) {
         throw new KeeperHubError(`No transactionHash returned for execution ${exec.executionId}`);

@@ -226,6 +226,73 @@ export class KeeperHubClient {
     }
     throw new KeeperHubError(`Timed out polling KeeperHub status for ${executionId}.`);
   }
+
+  /**
+   * Best-effort REST workflow creation (§1.3 fallback). KeeperHub's primary
+   * workflow-authoring surface is MCP; this is a secondary seam for orgs that
+   * expose a REST route. We probe a small set of plausible paths and treat the
+   * first 2xx as success. If none respond, we throw so the caller can fall back
+   * to the honest local registry — we never fabricate a remote id.
+   */
+  async createWorkflowRest(payload: {
+    name: string;
+    slug: string;
+    description: string;
+    chainId: number;
+    contractAddress: string;
+    steps: unknown[];
+  }): Promise<{ workflowId?: string; slug?: string; via: string; verified: boolean }> {
+    const candidatePaths = (
+      process.env.KEEPERHUB_WORKFLOW_PATH || "/workflows,/workflow/create,/workflows/create"
+    ).split(",").map((p) => p.trim()).filter(Boolean);
+
+    let lastErr: string | undefined;
+    for (const p of candidatePaths) {
+      try {
+        const { res, json } = await this.request(p, {
+          method: "POST",
+          headers: this.headers(),
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          const workflowId = json?.workflowId ?? json?.id ?? json?.data?.id;
+          const slug = json?.slug ?? json?.data?.slug ?? payload.slug;
+          return {
+            workflowId: workflowId ? String(workflowId) : undefined,
+            slug: slug ? String(slug) : undefined,
+            via: `rest:${p}`,
+            verified: false,
+          };
+        }
+        // 404/405 -> this path isn't the one; keep probing. Other codes are notable.
+        if (res.status !== 404 && res.status !== 405) {
+          lastErr = `HTTP ${res.status} at ${p}: ${json?.error || json?.message || "unknown"}`;
+        }
+      } catch (err: any) {
+        lastErr = err?.message;
+      }
+    }
+    throw new KeeperHubError(lastErr || "No REST workflow endpoint responded.");
+  }
+
+  /** Best-effort REST workflow listing (companion to createWorkflowRest). */
+  async listWorkflowsRest(): Promise<any[]> {
+    const candidatePaths = (
+      process.env.KEEPERHUB_WORKFLOW_LIST_PATH || "/workflows,/workflow/list"
+    ).split(",").map((p) => p.trim()).filter(Boolean);
+
+    for (const p of candidatePaths) {
+      try {
+        const { res, json } = await this.request(p, { method: "GET", headers: this.headers() });
+        if (res.ok) {
+          return Array.isArray(json) ? json : json?.workflows ?? [];
+        }
+      } catch {
+        /* keep probing */
+      }
+    }
+    throw new KeeperHubError("No REST workflow-list endpoint responded.");
+  }
 }
 
 export interface ContractCallParams {
