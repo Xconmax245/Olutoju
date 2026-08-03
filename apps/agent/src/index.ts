@@ -1,3 +1,4 @@
+
 import express from 'express';
 import cors from 'cors';
 import { ethers } from 'ethers';
@@ -6,12 +7,18 @@ import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
 import { KeeperHubClient, KeeperHubError } from './keeperhub';
+import { KeeperHubMcpClient } from './keeperhub-mcp';
+import { ensureDefenseWorkflow, listDefenseWorkflows, RegisteredWorkflow } from './keeperhub-workflows';
 import { runDefenseWorkflow, DEFAULT_DEFENSE_WORKFLOW } from './workflows/defense-workflow';
 import { buildIncidentReport, verifyIncidentReport, IncidentReport, IncidentTrigger } from './incident-report';
 import { settleX402, computeAdaptiveBounty, X402Settlement } from './x402';
 import { runChaos, buildPrivateRouteEvidence } from './chaos/orchestrator';
 import { classify, MockVaultAdapter } from './detection';
+import { runRace, RaceResult } from './mesh/race-coordinator';
+import { buildDefaultFleet, Watcher } from './mesh/watchers';
+import { MppRetainer, buildRetainerFromEnv, RetainerSettlement } from './mpp';
 dotenv.config();
+
 
 // Contract ABI (just the pieces we need) — ethers human-readable form
 const MockVaultABI = [
@@ -206,6 +213,18 @@ if (!KEEPERHUB_API_KEY || !KEEPERHUB_API_KEY.startsWith('kh_')) {
 }
 const keeperhub = new KeeperHubClient(KEEPERHUB_API_KEY);
 
+// ---------------------------------------------------------------------------
+// Sentinel Mesh — multi-watcher race layer (§2) + Workflow objects (§1.3)
+// ---------------------------------------------------------------------------
+const MESH_ENABLED = process.env.MESH_ENABLED !== 'false';
+const mcpClient = new KeeperHubMcpClient(KEEPERHUB_API_KEY);
+const fleet = buildDefaultFleet(process.env);
+// Retainer (MPP, §1.5/§3.4) — optional; only settles when configured.
+const retainer = buildRetainerFromEnv(process.env);
+let lastRace: RaceResult | null = null;
+let registeredWorkflows: RegisteredWorkflow[] = [];
+
+
 /** Simulate a defense write through KeeperHub (dry-run). Never burns gas. */
 async function simulateKeeperHub(contractAddress: string, functionName: string, functionArgs: unknown[] = []): Promise<{ ok: boolean; reason?: string }> {
   try {
@@ -273,7 +292,17 @@ function getActivePosition(): Position {
   return POSITIONS.find(p => p.id === getActivePositionId())!;
 }
 
+/** Read the vault's `blockPrimaryDefense` flag (best-effort; older ABI → false). */
+async function isPrimaryBlocked(contract: ethers.Contract): Promise<boolean> {
+  try {
+    return await contract.blockPrimaryDefense();
+  } catch {
+    return false;
+  }
+}
+
 async function updateStatusForPosition(position: Position, hf: string, prevHf: string) {
+
   currentStatus = {
     ...currentStatus,
     healthFactor: hf,
@@ -344,21 +373,84 @@ async function defendPosition(position: Position, contract: ethers.Contract, hf:
   const incidentId = `inc_${Date.now()}`;
   const detectedAt = new Date().toISOString();
   const chaosCtx = pendingChaos.get(position.id) || {};
+  const primaryBlocked = chaosCtx.forcedPrimaryFailure === true || await isPrimaryBlocked(contract);
+
+  // ---- Sentinel Mesh race (§2): independent watchers propose, one wins ----
+  let race: RaceResult | null = null;
+  let winnerAction: { functionName: string; label: string } | undefined;
+  if (MESH_ENABLED) {
+    try {
+      const proposals = await Promise.all(
+        fleet.map((w: Watcher) => w.propose({
+          healthFactor: Number(hf),
+          threshold: THRESHOLD,
+          primaryBlocked,
+          mcp: mcpClient,
+          log: (m) => { console.log(m); streamEmitter.emit('workflow', { incidentId, positionId: position.id, message: m, at: new Date().toISOString() }); },
+        }))
+      );
+      streamEmitter.emit('workflow', { incidentId, positionId: position.id, message: `[Mesh] ${proposals.length} watchers proposed. Racing...`, at: new Date().toISOString() });
+      race = await runRace({
+        keeperhub,
+        contractAddress: position.address,
+        chainId: CHAIN_ID,
+        abi: MockVaultJsonABI,
+        proposals,
+        log: (m) => { console.log(m); streamEmitter.emit('workflow', { incidentId, positionId: position.id, message: m, at: new Date().toISOString() }); },
+      });
+      lastRace = race;
+      streamEmitter.emit('race', race);
+      if (race.winner) {
+        winnerAction = {
+          functionName: race.winner.functionName,
+          label: race.winner.functionName,
+        };
+        console.log(`[Mesh] Winning watcher ${race.winner.watcher.id} (${race.winner.watcher.framework}) executes ${race.winner.functionName}.`);
+      } else {
+        console.warn(`[Mesh] No valid proposal. Falling back to the full escalating workflow.`);
+      }
+    } catch (err: any) {
+      console.error(`[Mesh] Race error (${err?.message}). Falling back to single-guardian workflow.`);
+    }
+  }
 
   // ---- Run the multi-step KeeperHub defense workflow (simulate->execute each) ----
-  const run = await runDefenseWorkflow({
-    keeperhub,
-    contractAddress: position.address,
-    chainId: CHAIN_ID,
-    abi: MockVaultJsonABI,
-    steps: DEFAULT_DEFENSE_WORKFLOW,
-    log: (m) => {
-      console.log(m);
-      streamEmitter.emit('workflow', { incidentId, positionId: position.id, message: m, at: new Date().toISOString() });
-    },
-  });
+  // If a mesh winner exists, we execute exactly that winner's action (one tx).
+  // Otherwise (mesh disabled or no winner) we run the full escalation path.
+  let run;
+  if (winnerAction) {
+    run = await runDefenseWorkflow({
+      keeperhub,
+      contractAddress: position.address,
+      chainId: CHAIN_ID,
+      abi: MockVaultJsonABI,
+      steps: [{
+        id: 'mesh-winner',
+        label: `Mesh winner: ${winnerAction.label}`,
+        functionName: winnerAction.functionName,
+        severity: 'restore',
+      }],
+      log: (m) => {
+        console.log(m);
+        streamEmitter.emit('workflow', { incidentId, positionId: position.id, message: m, at: new Date().toISOString() });
+      },
+    });
+  } else {
+    run = await runDefenseWorkflow({
+      keeperhub,
+      contractAddress: position.address,
+      chainId: CHAIN_ID,
+      abi: MockVaultJsonABI,
+      steps: DEFAULT_DEFENSE_WORKFLOW,
+      log: (m) => {
+        console.log(m);
+        streamEmitter.emit('workflow', { incidentId, positionId: position.id, message: m, at: new Date().toISOString() });
+      },
+    });
+  }
 
   const winning = run.winningStep;
+
   const outcome: Incident['outcome'] = run.outcome === 'success' ? 'success' : 'reverted';
   let txHash = winning?.txHash;
   let blockNumber = winning?.blockNumber;
@@ -463,11 +555,31 @@ async function defendPosition(position: Position, contract: ethers.Contract, hf:
       console.log('[x402] Settlement skipped (X402_ASSET/X402_PAYER_KEY/X402_PAYOUT_ADDRESS not configured).');
     }
 
-    // Persist the full report (report + settlement) alongside legacy attestation.
-    const enriched = { ...report, settlement: settlement || { settled: false, reason: 'not_configured' } };
+    // ---- MPP standing retainer (§1.5/§3.4): settle any due period ----
+    let retainerSettlement: RetainerSettlement | null = null;
+    if (retainer) {
+      try {
+        retainerSettlement = await retainer.settleDuePeriod({
+          provider,
+          payerSigner: X402_PAYER_KEY ? new ethers.Wallet(X402_PAYER_KEY, provider) : undefined,
+          log: (m) => { console.log(m); streamEmitter.emit('retainer', { incidentId, message: m }); },
+        });
+        if (retainerSettlement) streamEmitter.emit('retainer', retainerSettlement);
+      } catch (err: any) {
+        console.error('[MPP] Retainer settlement error:', err?.message);
+      }
+    }
+
+    // Persist the full report (report + settlement + retainer) alongside legacy attestation.
+    const enriched = {
+      ...report,
+      settlement: settlement || { settled: false, reason: 'not_configured' },
+      retainer: retainerSettlement,
+    };
     saveJson(path.join(ATTESTATIONS_DIR, `${incidentId}.json`), enriched);
     streamEmitter.emit('report', enriched);
   }
+
 
   // Clear the chaos context now that this incident is handled.
   pendingChaos.delete(position.id);
@@ -489,7 +601,34 @@ async function defendPosition(position: Position, contract: ethers.Contract, hf:
 async function main() {
   await verifyRpc();
 
+  // Register (or reuse) a real KeeperHub Workflow object per monitored position
+  // via MCP (§1.3). Falls back to a durable local registry with honest provenance.
+  try {
+    for (const pos of POSITIONS) {
+      const wf = await ensureDefenseWorkflow({
+        apiKey: KEEPERHUB_API_KEY!,
+        chainId: CHAIN_ID,
+        contractAddress: pos.address,
+        dataDir: DATA_DIR,
+        mcp: mcpClient,
+        log: (m) => console.log(m),
+      });
+      registeredWorkflows.push(wf);
+    }
+  } catch (err: any) {
+    console.warn('[Workflows] Registration step failed:', err?.message);
+  }
+
+  // Log the fleet + MCP tool discovery once at startup (cross-framework proof).
+  console.log(`[Mesh] Fleet: ${fleet.map(w => `${w.identity.id}(${w.identity.framework})`).join(', ')}`);
+  if (MESH_ENABLED) {
+    mcpClient.listTools()
+      .then(tools => console.log(`[MCP] Discovered ${tools.length} KeeperHub tools: ${tools.map(t => t.name).slice(0, 8).join(', ')}${tools.length > 8 ? ' …' : ''}`))
+      .catch(err => console.warn(`[MCP] Tool discovery unavailable: ${err?.message}`));
+  }
+
   for (const pos of POSITIONS) {
+
     try {
       const hfRaw = await contracts.get(pos.id)!.healthFactor();
       const hf = (Number(hfRaw) / 100).toFixed(2);
@@ -541,6 +680,48 @@ app.get('/api/status/history', (req, res) => {
 });
 
 app.get('/api/incidents', (req, res) => res.json(incidents));
+
+// ---- Sentinel Mesh introspection (§2 / §3.2) ----
+// The watcher fleet + the most recent race (who proposed what, who won, slashing).
+app.get('/api/mesh', (req, res) => {
+  res.json({
+    enabled: MESH_ENABLED,
+    policy: 'first-valid-simulation-wins',
+    fleet: fleet.map(w => ({ id: w.identity.id, framework: w.identity.framework, address: w.identity.address })),
+    lastRace,
+  });
+});
+
+// ---- KeeperHub Workflow objects (§1.3) ----
+// Prefers live MCP list-workflows; falls back to the local registry (honest provenance).
+app.get('/api/workflows', async (req, res) => {
+  try {
+    const listed = await listDefenseWorkflows({ apiKey: KEEPERHUB_API_KEY!, dataDir: DATA_DIR, mcp: mcpClient });
+    res.json({ registered: registeredWorkflows, ...listed });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'workflow listing failed' });
+  }
+});
+
+// ---- MCP tool discovery (§1.2) ----
+// Proves framework-agnostic access: lists the tools KeeperHub exposes over MCP.
+app.get('/api/mcp/tools', async (req, res) => {
+  try {
+    const tools = await mcpClient.listTools();
+    res.json({ endpoint: process.env.KEEPERHUB_MCP_URL || 'https://app.keeperhub.com/mcp', count: tools.length, tools });
+  } catch (err: any) {
+    res.status(502).json({ error: err?.message || 'MCP discovery failed' });
+  }
+});
+
+// ---- MPP standing retainer (§1.5 / §3.4) ----
+app.get('/api/retainer', (req, res) => {
+  if (!retainer) {
+    return res.json({ configured: false, note: 'MPP retainer not configured (set MPP_ASSET/MPP_PAYOUT_ADDRESS/MPP_AMOUNT_PER_PERIOD).' });
+  }
+  res.json({ configured: true, ...retainer.describe(), accrued: retainer.accrued() });
+});
+
 
 app.get('/api/attestation/:id', (req, res) => {
   const file = path.join(ATTESTATIONS_DIR, `${req.params.id}.json`);
@@ -662,6 +843,8 @@ app.get('/api/stream', (req, res) => {
   const onWorkflow = (data: any) => sendEvent('WORKFLOW_STEP', data);
   const onReport = (data: any) => sendEvent('INCIDENT_REPORT', data);
   const onSettlement = (data: any) => sendEvent('SETTLEMENT_UPDATE', data);
+  const onRace = (data: any) => sendEvent('MESH_RACE', data);
+  const onRetainer = (data: any) => sendEvent('RETAINER_UPDATE', data);
 
   // Heartbeat keeps proxies from dropping long-lived connections
   const heartbeat = setInterval(() => {
@@ -673,6 +856,8 @@ app.get('/api/stream', (req, res) => {
   streamEmitter.on('workflow', onWorkflow);
   streamEmitter.on('report', onReport);
   streamEmitter.on('settlement', onSettlement);
+  streamEmitter.on('race', onRace);
+  streamEmitter.on('retainer', onRetainer);
 
   req.on('close', () => {
     clearInterval(heartbeat);
@@ -681,7 +866,10 @@ app.get('/api/stream', (req, res) => {
     streamEmitter.off('workflow', onWorkflow);
     streamEmitter.off('report', onReport);
     streamEmitter.off('settlement', onSettlement);
+    streamEmitter.off('race', onRace);
+    streamEmitter.off('retainer', onRetainer);
   });
+
 });
 
 

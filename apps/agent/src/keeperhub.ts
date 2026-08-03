@@ -81,6 +81,21 @@ export class KeeperHubClient {
     return { res, json };
   }
 
+  /**
+   * Confirm the target chain is enabled on this KeeperHub org before executing.
+   * Returns the enabled chains list for tooling that needs it.
+   */
+  async listEnabledChains(): Promise<{ chainId: number; name?: string }[]> {
+    const { res, json } = await this.request("/chains", { method: "GET", headers: this.headers() });
+    if (!res.ok) {
+      throw new KeeperHubError(`Failed to fetch /api/chains (${res.status})`, res.status, json);
+    }
+    const chains: any[] = Array.isArray(json) ? json : json?.chains || [];
+    return chains
+      .filter((c) => c.isEnabled !== false)
+      .map((c) => ({ chainId: Number(c.chainId ?? c.id), name: c.name }));
+  }
+
   /** Confirm the target chain is enabled on this KeeperHub org before executing. */
   async assertChainEnabled(chainId: number): Promise<void> {
     const { res, json } = await this.request("/chains", { method: "GET", headers: this.headers() });
@@ -89,6 +104,7 @@ export class KeeperHubClient {
     }
     const chains: any[] = Array.isArray(json) ? json : json?.chains || [];
     const match = chains.find((c) => Number(c.chainId ?? c.id) === Number(chainId));
+
     if (!match) {
       throw new KeeperHubError(`Chain ${chainId} is not available on this KeeperHub org.`);
     }
@@ -220,7 +236,14 @@ export interface ContractCallParams {
   abi?: unknown[];
   value?: string;
   gasLimitMultiplier?: string;
+  /**
+   * Gas Sponsorship (§1.8): when true, the org's paymaster/sponsorship covers gas
+   * so a watcher with an EMPTY wallet can still execute through KeeperHub. The
+   * agent never holds gas — KeeperHub's engine sponsors it.
+   */
+  sponsorGas?: boolean;
 }
+
 
 function buildContractCallBody(params: ContractCallParams, simulate: boolean): Record<string, unknown> {
   const body: Record<string, unknown> = {
@@ -234,5 +257,9 @@ function buildContractCallBody(params: ContractCallParams, simulate: boolean): R
   };
   if (params.abi) body.abi = JSON.stringify(params.abi);
   if (params.value) body.value = params.value;
+  // Gas Sponsorship (§1.8): opt an empty-wallet watcher into org-sponsored gas.
+  if (params.sponsorGas) body.sponsorGas = true;
   return body;
 }
+
+
