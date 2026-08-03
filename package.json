@@ -1,0 +1,19 @@
+{
+  "name": "olutoju",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspaces",
+    "dev:web": "npm run dev -w web",
+    "dev:agent": "npm run dev -w olutoju-agent",
+    "compile": "npm run compile -w olutoju-contracts",
+    "node:local": "npx hardhat node --network hardhat",
+    "deploy:local": "npx hardhat run scripts/deploy.ts --network localhost",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "build:web": "npm run build -w web",
+    "lint:web": "npm run lint -w web"
+  }
+}
