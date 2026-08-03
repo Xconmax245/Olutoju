@@ -1,0 +1,68 @@
+{
+  "version": "1",
+  "generatedAt": "2026-08-03T21:45:32.092Z",
+  "chainId": 84532,
+  "network": "Base Sepolia",
+  "vaultAddress": "0x6f3A57f763e54dAED307433E86fa1AfE840c3f09",
+  "keeperhub": {
+    "keyPrefix": "kh_znulAAg…(35 chars)",
+    "mcpEndpoint": "https://app.keeperhub.com/mcp",
+    "mcpInitialized": true,
+    "toolsDiscovered": [
+      "list_workflows",
+      "get_workflow",
+      "create_workflow",
+      "update_workflow",
+      "delete_workflow",
+      "list_projects",
+      "create_project",
+      "list_tags",
+      "create_tag",
+      "execute_workflow",
+      "get_execution",
+      "ai_generate_workflow",
+      "list_action_schemas",
+      "search_plugins",
+      "get_plugin",
+      "list_integrations",
+      "get_wallet_integration",
+      "search_templates",
+      "get_template",
+      "deploy_template",
+      "tools_documentation",
+      "execute_transfer",
+      "execute_contract_call",
+      "execute_check_and_execute",
+      "get_direct_execution_status",
+      "search_protocol_actions",
+      "execute_protocol_action",
+      "search_workflows",
+      "call_workflow",
+      "list_workflow",
+      "unlist_workflow",
+      "update_workflow_listing",
+      "validate_workflow",
+      "prepare_test_pin_data",
+      "get_workflow_listing"
+    ]
+  },
+  "workflow": {
+    "slug": "sentinel-defense-84532-6f3a57f7",
+    "workflowId": "vfgnrtrjqv3j8jryv18yd",
+    "source": "keeperhub",
+    "via": "ensure"
+  },
+  "read": {
+    "healthFactor": "1.50"
+  },
+  "execution": {
+    "functionName": "topUpCollateral",
+    "sponsorGas": true,
+    "outcome": "success",
+    "txHash": "0xa8ef4e7cfc720a0b7c815e62c91663801d7e2823d37869feac07775fe1818e66",
+    "transactionLink": "https://sepolia.basescan.org/tx/0xa8ef4e7cfc720a0b7c815e62c91663801d7e2823d37869feac07775fe1818e66",
+    "blockNumber": 45012625,
+    "receiptStatus": 1
+  },
+  "notes": []
+}

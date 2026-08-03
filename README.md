@@ -8,12 +8,14 @@ The system features real-time monitoring, cryptographic incident attestations, a
 
 ## ✅ Verified On-Chain Proof
 
-The KeeperHub **Direct Execution** rail is verified with two real transactions on public Base Sepolia. KeeperHub's own organization wallet (`0x6331eb45...`) signed and routed both — the agent treasury wallet never signs defensive transactions.
-
-| # | tx hash | block | function | status |
-|---|---|---|---|---|
-| 1 | [`0x400d30e2...e63fa3`](https://sepolia.basescan.org/tx/0x400d30e2de6482247249829cfbfbe2a4bc906a82ced3b1a7bf0d2c8f22e63fa3) | [44974210](https://sepolia.basescan.org/block/44974210) | `topUpCollateral` | ✅ Success |
-| 2 | [`0x04dcac8b...39204`](https://sepolia.basescan.org/tx/0x04dcac8b6abc1ba45edaa916a89fbdcf98d811e964be7f514c7b01354ab39204) | [44979064](https://sepolia.basescan.org/block/44979064) | `topUpCollateral` | ✅ Success |
+### Verified On-Chain Proof (Base Sepolia)
+| Component | Status | Proof / Evidence |
+| :--- | :--- | :--- |
+| **KeeperHub Direct Execution** | Proven | Tx: [0xe835...2257](https://sepolia.basescan.org/tx/0xe83538688b062ed7f0eb313a0742b4e86341395dba604463c0853dc2c2602257) |
+| **Agent / Protocol Treasury Key** | Proven | Distinct Wallets Verified |
+| **x402 Bounty Settlement** | Proven | Tx: [0xe657...035e](https://sepolia.basescan.org/tx/0xe6572b9270ceeab46d30da8eedaa8aa2a7539be98e35a57253f2e3ded5a4035e) |
+| **MPP Retainer Accrual** | Proven | Tx: [0x35e5...cb2e](https://sepolia.basescan.org/tx/0x35e50071aeeb3812e1bc03749d27501546c999910b82c0bfeecd95ea3925cb2e) |
+| **MCP Sentinel** | Proven | `execute_contract_call` (tools/call verified live) |
 
 **Contract (MockVault):** [`0x6f3A57f763e54dAED307433E86fa1AfE840c3f09`](https://sepolia.basescan.org/address/0x6f3A57f763e54dAED307433E86fa1AfE840c3f09) — deployed 2026-08-02, Base Sepolia (chain 84532).
 
