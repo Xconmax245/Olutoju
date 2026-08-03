@@ -1,3 +1,7 @@
+"use client";
+
+import { useState } from "react";
+
 const QA = [
   {
     q: "Does Olutoju hold my funds?",
@@ -18,9 +22,15 @@ const QA = [
 ];
 
 export function FAQ() {
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+
+  const toggle = (i: number) => {
+    setOpenIndex(openIndex === i ? null : i);
+  };
+
   return (
     <section style={{ maxWidth: 820, margin: "0 auto", padding: "120px 32px" }}>
-      <div className="io" data-dir="up" style={{ marginBottom: 48 }}>
+      <div data-aos="fade-up" style={{ marginBottom: 48 }}>
         <span className="mono" style={{ textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--coral)", fontSize: 12 }}>
           FAQ
         </span>
@@ -30,26 +40,50 @@ export function FAQ() {
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        {QA.map((item, i) => (
-          <details
-            key={i}
-            className="io faq-item"
-            data-dir="up"
-            style={{
-              background: "var(--paper)",
-              border: "1.5px solid var(--paper-line)",
-              borderRadius: 16,
-              padding: "20px 24px",
-              transitionDelay: `${i * 0.05}s`,
-            }}
-          >
-            <summary style={{ cursor: "pointer", listStyle: "none", fontSize: 17, fontWeight: 600, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16 }}>
-              {item.q}
-              <span className="mono" style={{ color: "var(--coral)", fontSize: 20 }}>+</span>
-            </summary>
-            <p style={{ color: "var(--muted)", marginTop: 12, fontSize: 15.5, lineHeight: 1.6 }}>{item.a}</p>
-          </details>
-        ))}
+        {QA.map((item, i) => {
+          const isOpen = openIndex === i;
+          return (
+            <div
+              key={i}
+              data-aos="fade-up"
+              style={{
+                background: "var(--paper)",
+                border: "1.5px solid var(--paper-line)",
+                borderRadius: 16,
+                padding: "20px 24px",
+                transitionDelay: `${i * 0.05}s`,
+                cursor: "pointer",
+              }}
+              onClick={() => toggle(i)}
+            >
+              <div style={{ fontSize: 17, fontWeight: 600, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16 }}>
+                {item.q}
+                <span
+                  className="mono"
+                  style={{
+                    color: "var(--coral)",
+                    fontSize: 20,
+                    transform: isOpen ? "rotate(45deg)" : "rotate(0deg)",
+                    transition: "transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1)",
+                  }}
+                >
+                  +
+                </span>
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateRows: isOpen ? "1fr" : "0fr",
+                  transition: "grid-template-rows 0.3s cubic-bezier(0.2, 0.8, 0.2, 1)",
+                }}
+              >
+                <div style={{ overflow: "hidden" }}>
+                  <p style={{ color: "var(--muted)", marginTop: 12, fontSize: 15.5, lineHeight: 1.6 }}>{item.a}</p>
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </section>
   );
