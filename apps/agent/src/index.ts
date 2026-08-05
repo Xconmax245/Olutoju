@@ -18,7 +18,7 @@ import { runRace, RaceResult } from './mesh/race-coordinator';
 import { buildDefaultFleet, buildFleetConfigs, Watcher } from './mesh/watchers';
 import { WatcherPool } from './mesh/watcher-pool';
 import { MppRetainer, buildRetainerFromEnv, RetainerSettlement } from './mpp';
-dotenv.config();
+dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
 
 // Contract ABI (just the pieces we need) — ethers human-readable form
