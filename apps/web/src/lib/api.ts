@@ -25,7 +25,10 @@ export interface Incident {
   gasUsed?: string;
   outcome: IncidentOutcome;
   timestamp: string;
+  /** KeeperHub Workflow object that governed this defense (§1.3), when known. */
+  keeperhubWorkflowId?: string;
 }
+
 
 export interface Attestation {
   incident_id: string;

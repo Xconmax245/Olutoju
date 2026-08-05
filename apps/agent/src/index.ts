@@ -166,7 +166,15 @@ interface Incident {
   txHash?: string;
   blockNumber?: number;
   gasUsed?: string;
+  /**
+   * KeeperHub Workflow object this defense belongs to (§1.3). Prefers the REAL
+   * remote workflow id (registered workflow with source === "keeperhub"); falls
+   * back to the local run's workflowId. Lets the dashboard/API surface a link to
+   * the workflow that governed the response.
+   */
+  keeperhubWorkflowId?: string;
 }
+
 
 interface Attestation {
   incident_id: string;
@@ -301,6 +309,22 @@ function getActiveContract(): ethers.Contract {
 
 function getActivePosition(): Position {
   return POSITIONS.find(p => p.id === getActivePositionId())!;
+}
+
+/**
+ * Resolve the KeeperHub Workflow id governing a position's defense (§1.3).
+ * Prefers the registered workflow object for that contract (favoring a REAL
+ * remote `source === "keeperhub"` record); falls back to the local run's id.
+ */
+function resolveKeeperhubWorkflowId(
+  contractAddress: string,
+  runWorkflowId?: string
+): string | undefined {
+  const matches = registeredWorkflows.filter(
+    (w) => w.contractAddress?.toLowerCase() === contractAddress.toLowerCase()
+  );
+  const remote = matches.find((w) => w.source === 'keeperhub');
+  return remote?.workflowId ?? matches[0]?.workflowId ?? runWorkflowId;
 }
 
 /** Read the vault's `blockPrimaryDefense` flag (best-effort; older ABI → false). */
@@ -506,10 +530,12 @@ async function defendPosition(position: Position, contract: ethers.Contract, hf:
     outcome,
     txHash,
     blockNumber,
-    gasUsed
+    gasUsed,
+    keeperhubWorkflowId: resolveKeeperhubWorkflowId(position.address, run.workflowId),
   };
 
   incidents.unshift(incident);
+
   saveJson(INCIDENTS_FILE, incidents);
 
   // ---- Build the private-routing evidence (§1.7) ----
