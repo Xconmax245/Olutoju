@@ -1,0 +1,22 @@
+{
+  "incident_id": "inc_1785726412321",
+  "position_id": "position-1",
+  "chain_id": 84532,
+  "trigger": {
+    "health_factor": "1.05",
+    "threshold": "1.10"
+  },
+  "simulation_result": {
+    "primary": "passed",
+    "fallback_used": "false"
+  },
+  "tx_hash": "0x04dcac8b6abc1ba45edaa916a89fbdcf98d811e964be7f514c7b01354ab39204",
+  "block_number": 44979064,
+  "final_state": {
+    "health_factor": "1.50"
+  },
+  "timestamp": "2026-08-03T03:06:58.944Z",
+  "payload": "{\"incident_id\":\"inc_1785726412321\",\"position_id\":\"position-1\",\"chain_id\":84532,\"trigger\":{\"health_factor\":\"1.05\",\"threshold\":\"1.10\"},\"simulation_result\":{\"primary\":\"passed\",\"fallback_used\":\"false\"},\"tx_hash\":\"0x04dcac8b6abc1ba45edaa916a89fbdcf98d811e964be7f514c7b01354ab39204\",\"block_number\":44979064,\"final_state\":{\"health_factor\":\"1.50\"},\"timestamp\":\"2026-08-03T03:06:58.944Z\"}",
+  "verifier_pubkey": "0xe4cf2346C94d6Eb91d14FD4Ac63f85Fd3717c69c",
+  "signature": "0xab58c2d17db5be87978b8e2021ff2295b6708e79c5a5272a2c723b5fcd1735a9306088abd0080b39ebc1f22462ebbddeb4512660fc3db02e2f5582d3f393578e1b"
+}
