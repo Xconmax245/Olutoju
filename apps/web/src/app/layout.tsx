@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { AOSProvider } from "@/components/AOSProvider";
+import { NavigationProgress } from "@/components/PageTransition";
+import { MotionLayout } from "@/components/MotionLayout";
 
 export const metadata: Metadata = {
   title: "Olutoju | Autonomous DeFi position guardian",
@@ -29,7 +31,14 @@ export default function RootLayout({
         />
       </head>
       <body>
-        <AOSProvider>{children}</AOSProvider>
+        {/* Top progress bar — sweeps on every route change */}
+        <NavigationProgress />
+        <AOSProvider>
+          {/* Re-mounts on pathname change to replay the page-enter animation */}
+          <MotionLayout>
+            {children}
+          </MotionLayout>
+        </AOSProvider>
       </body>
     </html>
   );
