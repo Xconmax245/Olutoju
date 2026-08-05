@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useRef } from "react";
 import { api, Incident, StatusResponse, Attestation, HistoryPoint } from "@/lib/api";
 import Link from "next/link";
 import { ethers } from "ethers";
@@ -9,64 +9,119 @@ import { DialMeter } from "@/components/ui/DialMeter";
 import { MeshPanel } from "@/components/MeshPanel";
 import { clockTime, relativeTime, shortHash } from "@/lib/format";
 
+// ── Types not yet in api.ts ──────────────────────────────────────────────────
+interface SettlementUpdate { incidentId: string; message: string; txHash?: string; }
+interface RetainerUpdate { incidentId?: string; message?: string; settled?: boolean; txHash?: string; amount?: string; }
+interface WorkflowStep { incidentId: string; message: string; at: string; }
+interface RetainerStatus {
+  configured: boolean;
+  protocol?: string;
+  asset?: string;
+  payTo?: string;
+  amountPerPeriod?: string;
+  periodSeconds?: number;
+  accrued?: string;
+  error?: string;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function hfToFraction(hf: number): number {
   if (!isFinite(hf)) return 1;
   return Math.max(0, Math.min(1, (hf - 1) / 1.5));
 }
 
 const OUTCOME: Record<Incident["outcome"], { label: string; color: string; bg: string }> = {
-  success: { label: "defended", color: "var(--lime)", bg: "var(--lime-bg)" },
-  reverted: { label: "reverted", color: "var(--coral)", bg: "var(--coral-bg)" },
-  no_action: { label: "no action", color: "var(--muted-on-dark)", bg: "var(--ink-soft)" },
+  success:   { label: "defended",  color: "var(--lime)",           bg: "var(--lime-bg)" },
+  reverted:  { label: "reverted",  color: "var(--coral)",          bg: "var(--coral-bg)" },
+  no_action: { label: "no action", color: "var(--muted-on-dark)",  bg: "var(--ink-soft)" },
 };
 
+function Tag({ color, bg, children }: { color: string; bg: string; children: React.ReactNode }) {
+  return (
+    <span className="mono" style={{ color, background: bg, borderRadius: 100, padding: "3px 10px", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>
+      {children}
+    </span>
+  );
+}
+
+function SectionHeading({ children }: { children: React.ReactNode }) {
+  return (
+    <h2 className="mono" style={{ textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--muted)", fontSize: 11, marginBottom: 14 }}>
+      {children}
+    </h2>
+  );
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
+  const [retainerStatus, setRetainerStatus] = useState<RetainerStatus | null>(null);
 
+  // Live feed state
+  const [settlements, setSettlements] = useState<SettlementUpdate[]>([]);
+  const [retainerEvents, setRetainerEvents] = useState<RetainerUpdate[]>([]);
+  const [workflowLog, setWorkflowLog] = useState<WorkflowStep[]>([]);
+
+  // UI state
   const [incidentTab, setIncidentTab] = useState<"activity" | "outcome">("activity");
   const [timeframe, setTimeframe] = useState<"Hour" | "Day" | "Week">("Hour");
   const [positionMenuOpen, setPositionMenuOpen] = useState(false);
   const [isSwitchingPosition, setIsSwitchingPosition] = useState(false);
-
   const [isTriggering, setIsTriggering] = useState(false);
+  const [expandedIncident, setExpandedIncident] = useState<string | null>(null);
   const [selectedAttestation, setSelectedAttestation] = useState<Attestation | null>(null);
   const [isVerifying, setIsVerifying] = useState(false);
   const [verificationResult, setVerificationResult] = useState<boolean | null>(null);
+  const [showWorkflowLog, setShowWorkflowLog] = useState(false);
+  const logEndRef = useRef<HTMLDivElement>(null);
 
+  // ── Initial load ─────────────────────────────────────────────────────────
   useEffect(() => {
     api.getStatus().then(setStatus).catch(console.error);
     api.getIncidents().then(setIncidents).catch(console.error);
+    fetch("/api/retainer").then(r => r.json()).then(setRetainerStatus).catch(console.error);
   }, []);
 
   useEffect(() => {
     api.getHistory(timeframe).then(setHistory).catch(console.error);
   }, [timeframe]);
 
-  // Server-Sent Events for live streaming
+  // ── SSE live stream ───────────────────────────────────────────────────────
   useEffect(() => {
-    const eventSource = new EventSource("/api/stream");
-    eventSource.onmessage = (event) => {
+    const es = new EventSource("/api/stream");
+    es.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data);
-        if (data.type === "INCIDENT_CREATED") {
-          setIncidents((prev) => [data.payload, ...prev]);
-        } else if (data.type === "STATUS_UPDATE") {
-          setStatus(data.payload);
+        const { type, payload } = JSON.parse(event.data);
+        if (type === "INCIDENT_CREATED") {
+          setIncidents(prev => [payload, ...prev]);
+        } else if (type === "STATUS_UPDATE") {
+          setStatus(payload);
+        } else if (type === "SETTLEMENT_UPDATE") {
+          setSettlements(prev => [payload, ...prev].slice(0, 20));
+        } else if (type === "RETAINER_UPDATE") {
+          setRetainerEvents(prev => [payload, ...prev].slice(0, 20));
+          // refresh retainer status after a payment
+          fetch("/api/retainer").then(r => r.json()).then(setRetainerStatus).catch(() => {});
+        } else if (type === "WORKFLOW_STEP") {
+          setWorkflowLog(prev => [...prev, payload].slice(-80));
+          logEndRef.current?.scrollIntoView({ behavior: "smooth" });
         }
       } catch (err) {
-        console.error("Failed to parse SSE", err);
+        console.error("SSE parse error", err);
       }
     };
-    return () => eventSource.close();
+    return () => es.close();
   }, []);
 
+  // ── Handlers ─────────────────────────────────────────────────────────────
   const handleChaosMode = async () => {
     setIsTriggering(true);
     try {
       await api.triggerChaosMode();
-      await handleForceCheck();
+      const updated = await api.getStatus();
+      setStatus(updated);
     } catch (e: any) {
       alert(e.message || "Failed to trigger chaos mode");
     }
@@ -85,11 +140,8 @@ export default function Dashboard() {
       const updated = await api.setActivePosition(positionId);
       setStatus(updated);
       setHistory(await api.getHistory(timeframe));
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setIsSwitchingPosition(false);
-    }
+    } catch (e) { console.error(e); }
+    finally { setIsSwitchingPosition(false); }
   };
 
   const handleViewAttestation = async (id: string) => {
@@ -97,9 +149,7 @@ export default function Dashboard() {
       const data = await api.getAttestation(id);
       setSelectedAttestation(data);
       setVerificationResult(null);
-    } catch (e) {
-      console.error(e);
-    }
+    } catch (e) { console.error(e); }
   };
 
   const handleVerify = () => {
@@ -110,53 +160,46 @@ export default function Dashboard() {
         const { payload, signature, verifier_pubkey } = selectedAttestation;
         const recovered = ethers.verifyMessage(payload, signature);
         setVerificationResult(recovered.toLowerCase() === verifier_pubkey.toLowerCase());
-      } catch {
-        setVerificationResult(false);
-      }
+      } catch { setVerificationResult(false); }
       setIsVerifying(false);
     }, 800);
   };
 
   const filteredIncidents = useMemo(
-    () =>
-      incidentTab === "outcome"
-        ? incidents.filter((i) => i.outcome === "success" || i.outcome === "reverted")
-        : incidents,
+    () => incidentTab === "outcome"
+      ? incidents.filter(i => i.outcome === "success" || i.outcome === "reverted")
+      : incidents,
     [incidents, incidentTab]
   );
 
+  // ── Derived display values ────────────────────────────────────────────────
   const hf = status ? parseFloat(status.healthFactor) : NaN;
   const danger = isFinite(hf) && hf < 1.2;
   const online = status?.isAgentOnline ?? false;
-  const defended = incidents.filter((i) => i.outcome === "success").length;
+  const defended = incidents.filter(i => i.outcome === "success").length;
   const activePosition =
-    status?.positions?.find((p) => p.id === status.activePositionId)?.label ||
-    status?.positions?.[0]?.label ||
-    "Aave · WETH/USDC";
+    status?.positions?.find(p => p.id === status.activePositionId)?.label ||
+    status?.positions?.[0]?.label || "Aave · WETH/USDC";
 
+  const lastSettlement = settlements[0];
+  const lastRetainerEvent = retainerEvents[0];
+
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <main style={{ minHeight: "100vh", background: "var(--paper)", color: "var(--ink)", paddingBottom: 40 }}>
-      {/* HEADER */}
-      <header
-        style={{
-          position: "sticky",
-          top: 0,
-          zIndex: 30,
-          background: "rgba(243,240,250,0.9)",
-          backdropFilter: "blur(10px)",
-          borderBottom: "1px solid var(--paper-line)",
-        }}
-      >
-        <div style={{ maxWidth: 1120, margin: "0 auto", padding: "14px 24px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+    <main style={{ minHeight: "100vh", background: "var(--paper)", color: "var(--ink)", paddingBottom: 56 }}>
+
+      {/* ── HEADER ── */}
+      <header style={{ position: "sticky", top: 0, zIndex: 30, background: "rgba(243,240,250,0.92)", backdropFilter: "blur(12px)", borderBottom: "1px solid var(--paper-line)" }}>
+        <div style={{ maxWidth: 1200, margin: "0 auto", padding: "14px 24px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
             <Link href="/" style={{ fontFamily: "var(--font-display)", display: "flex", alignItems: "center", gap: 9, fontSize: 19, fontWeight: 700 }}>
-              <Logo />
-              olutoju
+              <Logo /> olutoju
             </Link>
             <span style={{ width: 1, height: 22, background: "var(--paper-line)" }} />
+            {/* Position switcher */}
             <div style={{ position: "relative" }}>
               <button
-                onClick={() => setPositionMenuOpen((o) => !o)}
+                onClick={() => setPositionMenuOpen(o => !o)}
                 aria-expanded={positionMenuOpen}
                 style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600 }}
               >
@@ -164,22 +207,17 @@ export default function Dashboard() {
                 <span className="mono" style={{ color: "var(--coral)" }}>{positionMenuOpen ? "▴" : "▾"}</span>
               </button>
               {positionMenuOpen && status?.positions && (
-                <div style={{ position: "absolute", left: 0, top: "calc(100% + 8px)", width: 250, background: "var(--paper)", border: "1px solid var(--paper-line)", borderRadius: 14, boxShadow: "rgba(18,17,42,0.18) 0px 12px 30px", padding: 8, zIndex: 40 }}>
-                  {status.positions.map((pos) => {
+                <div style={{ position: "absolute", left: 0, top: "calc(100% + 8px)", width: 260, background: "var(--paper)", border: "1px solid var(--paper-line)", borderRadius: 14, boxShadow: "rgba(18,17,42,0.18) 0px 12px 30px", padding: 8, zIndex: 40 }}>
+                  {status.positions.map(pos => {
                     const isActive = pos.id === status.activePositionId;
                     return (
-                      <button
-                        key={pos.id}
-                        onClick={() => handleSwitchPosition(pos.id)}
-                        style={{ width: "100%", textAlign: "left", padding: "10px 12px", borderRadius: 10, background: isActive ? "var(--lime-bg)" : "transparent", color: "var(--ink)", fontSize: 13, fontWeight: 600 }}
-                      >
+                      <button key={pos.id} onClick={() => handleSwitchPosition(pos.id)}
+                        style={{ width: "100%", textAlign: "left", padding: "10px 12px", borderRadius: 10, background: isActive ? "var(--lime-bg)" : "transparent", color: "var(--ink)", fontSize: 13, fontWeight: 600 }}>
                         <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
                           <span style={{ width: 6, height: 6, borderRadius: "50%", background: isActive ? "var(--coral)" : "var(--muted)" }} />
                           {pos.label}
                         </span>
-                        <span className="mono" style={{ display: "block", color: "var(--muted)", fontSize: 11, marginTop: 4, paddingLeft: 14 }}>
-                          {shortHash(pos.address)}
-                        </span>
+                        <span className="mono" style={{ display: "block", color: "var(--muted)", fontSize: 11, marginTop: 4, paddingLeft: 14 }}>{shortHash(pos.address)}</span>
                       </button>
                     );
                   })}
@@ -188,7 +226,13 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            {/* Live settlement toast */}
+            {lastSettlement && (
+              <div className="mono" style={{ fontSize: 11, color: "var(--lime)", background: "var(--ink)", padding: "5px 12px", borderRadius: 100, maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={lastSettlement.message}>
+                💸 {lastSettlement.message}
+              </div>
+            )}
             <div className="mono" title="Confirmed defenses" style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--ink)", color: "var(--lime)", padding: "6px 12px", borderRadius: 100, fontSize: 12 }}>
               <span className="blink-dot" style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--lime)" }} />
               {defended} defended
@@ -198,22 +242,24 @@ export default function Dashboard() {
         </div>
       </header>
 
-      {/* BANNER */}
+      {/* ── BANNER ── */}
       {status?.bannerMessage && (
-        <div style={{ maxWidth: 1120, margin: "24px auto 0", padding: "0 24px" }}>
+        <div style={{ maxWidth: 1200, margin: "20px auto 0", padding: "0 24px" }}>
           <div style={{ background: "var(--coral-bg)", borderLeft: "3px solid var(--coral)", borderRadius: 12, padding: "14px 18px", color: "var(--coral)", fontWeight: 600, fontSize: 14 }}>
             {status.bannerMessage}
           </div>
         </div>
       )}
 
-      {/* GRID */}
-      <div style={{ maxWidth: 1120, margin: "0 auto", padding: "28px 24px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }} className="dash-grid">
-        {/* LEFT: OVERVIEW */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-          {/* Primary readout — dark mech card */}
-          <section style={{ background: "var(--ink)", borderRadius: 24, padding: 32 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+      {/* ── MAIN GRID ── */}
+      <div style={{ maxWidth: 1200, margin: "0 auto", padding: "24px 24px 0", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }} className="dash-grid">
+
+        {/* ═══ LEFT COLUMN ═══ */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+
+          {/* Primary health readout */}
+          <section style={{ background: "var(--ink)", borderRadius: 24, padding: "28px 32px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 {online && <span className="blink-dot" style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--lime)" }} />}
                 <span style={{ color: "var(--paper)", fontWeight: 600 }}>{online ? "Guardian online" : "Guardian offline"}</span>
@@ -222,7 +268,8 @@ export default function Dashboard() {
                 {status?.lastCheckedAt ? relativeTime(status.lastCheckedAt) : "—"}
               </span>
             </div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 48, marginTop: 10, paddingBottom: 10 }}>
+
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 48, paddingBottom: 8 }}>
               <DialMeter
                 value={status?.healthFactor || "—"}
                 unit="Health factor"
@@ -230,30 +277,94 @@ export default function Dashboard() {
                 strokeColor={danger ? "var(--coral)" : "var(--lime)"}
                 size={200}
               />
-              <div style={{ display: "flex", flexDirection: "column", gap: 24, color: "var(--muted-on-dark)", fontSize: 13 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 20, color: "var(--muted-on-dark)", fontSize: 13 }}>
                 <div>
-                  <div style={{ marginBottom: 6, opacity: 0.8 }}>Threshold</div>
-                  <div className="mono" style={{ color: "var(--paper)", fontSize: 16 }}>1.20</div>
+                  <div style={{ marginBottom: 5, opacity: 0.8 }}>Threshold</div>
+                  <div className="mono" style={{ color: "var(--paper)", fontSize: 17 }}>1.20</div>
                 </div>
                 <div>
-                  <div style={{ marginBottom: 6, opacity: 0.8 }}>Settled via</div>
-                  <div className="mono" style={{ color: "var(--paper)", fontSize: 16 }}>KeeperHub</div>
+                  <div style={{ marginBottom: 5, opacity: 0.8 }}>Chain</div>
+                  <div className="mono" style={{ color: "var(--paper)", fontSize: 13 }}>{status?.chain || "—"}</div>
+                </div>
+                <div>
+                  <div style={{ marginBottom: 5, opacity: 0.8 }}>Defenses</div>
+                  <div className="mono" style={{ color: "var(--lime)", fontSize: 17 }}>{defended}</div>
                 </div>
               </div>
             </div>
           </section>
 
-          {/* History chart — paper card */}
+          {/* ── Economic Activity — x402 + MPP ── */}
+          <section style={{ background: "var(--paper)", border: "1.5px solid var(--paper-line)", borderRadius: 20, padding: 24 }}>
+            <SectionHeading>Economic settlement</SectionHeading>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+              {/* x402 */}
+              <div style={{ background: "var(--ink)", borderRadius: 16, padding: "18px 20px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  <span style={{ color: "var(--muted-on-dark)", fontSize: 12, fontWeight: 600 }}>x402 Bounty</span>
+                  <Tag color="var(--ink)" bg="var(--lime-bg)">outcome-gated</Tag>
+                </div>
+                {lastSettlement ? (
+                  <>
+                    <div style={{ color: "var(--lime)", fontSize: 13, marginBottom: 6, lineHeight: 1.4 }}>{lastSettlement.message}</div>
+                    {lastSettlement.txHash && (
+                      <a href={`https://sepolia.basescan.org/tx/${lastSettlement.txHash}`} target="_blank" rel="noreferrer"
+                        className="mono" style={{ color: "var(--muted-on-dark)", fontSize: 10 }}>
+                        {shortHash(lastSettlement.txHash)} ↗
+                      </a>
+                    )}
+                  </>
+                ) : (
+                  <div className="mono" style={{ color: "var(--muted-on-dark)", fontSize: 12 }}>
+                    Paid on successful defense.<br />Trigger chaos to see it fire.
+                  </div>
+                )}
+              </div>
+
+              {/* MPP retainer */}
+              <div style={{ background: "var(--ink)", borderRadius: 16, padding: "18px 20px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  <span style={{ color: "var(--muted-on-dark)", fontSize: 12, fontWeight: 600 }}>MPP Retainer</span>
+                  {retainerStatus?.configured
+                    ? <Tag color="var(--lime)" bg="var(--ink-card)">active</Tag>
+                    : <Tag color="var(--muted-on-dark)" bg="var(--ink-card)">not configured</Tag>
+                  }
+                </div>
+                {retainerStatus?.configured ? (
+                  <>
+                    <div className="mono" style={{ color: "var(--paper)", fontSize: 14, marginBottom: 6 }}>
+                      {retainerStatus.amountPerPeriod
+                        ? `${(Number(retainerStatus.amountPerPeriod) / 1e6).toFixed(2)} USDC`
+                        : "—"} / {retainerStatus.periodSeconds ? `${retainerStatus.periodSeconds}s` : "period"}
+                    </div>
+                    {lastRetainerEvent && (
+                      <div style={{ color: "var(--peri)", fontSize: 11, lineHeight: 1.4 }}>
+                        {lastRetainerEvent.message || (lastRetainerEvent.settled ? "Settled ✓" : "")}
+                      </div>
+                    )}
+                    {retainerStatus.accrued && (
+                      <div className="mono" style={{ color: "var(--muted-on-dark)", fontSize: 11, marginTop: 6 }}>
+                        accrued: {retainerStatus.accrued}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="mono" style={{ color: "var(--muted-on-dark)", fontSize: 12 }}>
+                    Periodic standing retainer.<br />Set MPP_* env vars to enable.
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+
+          {/* History sparkline */}
           <section style={{ background: "var(--paper)", border: "1.5px solid var(--paper-line)", borderRadius: 20, padding: 24 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <h2 className="mono" style={{ textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--muted)", fontSize: 12 }}>History</h2>
+              <SectionHeading>Health factor history</SectionHeading>
               <div style={{ display: "flex", gap: 6 }}>
-                {(["Hour", "Day", "Week"] as const).map((tf) => (
-                  <button
-                    key={tf}
-                    onClick={() => setTimeframe(tf)}
-                    style={{ fontSize: 12, fontWeight: 600, padding: "5px 10px", borderRadius: 100, background: timeframe === tf ? "var(--ink)" : "transparent", color: timeframe === tf ? "var(--lime)" : "var(--muted)" }}
-                  >
+                {(["Hour", "Day", "Week"] as const).map(tf => (
+                  <button key={tf} onClick={() => setTimeframe(tf)}
+                    style={{ fontSize: 12, fontWeight: 600, padding: "5px 10px", borderRadius: 100, background: timeframe === tf ? "var(--ink)" : "transparent", color: timeframe === tf ? "var(--lime)" : "var(--muted)" }}>
                     {tf}
                   </button>
                 ))}
@@ -266,8 +377,8 @@ export default function Dashboard() {
 
           {/* Guardian actions */}
           <section>
-            <h2 className="mono" style={{ textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--muted)", fontSize: 12, marginBottom: 12 }}>Guardian actions</h2>
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <SectionHeading>Guardian actions</SectionHeading>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <button onClick={handleChaosMode} disabled={isTriggering} className="btn-primary" style={{ opacity: isTriggering ? 0.5 : 1 }}>
                 {isTriggering ? "Triggering…" : "⚡ Chaos mode"}
               </button>
@@ -275,60 +386,145 @@ export default function Dashboard() {
               {incidents[0]?.outcome === "success" && (
                 <button onClick={() => handleViewAttestation(incidents[0].id)} className="btn-secondary">◈ Latest attestation</button>
               )}
+              <button onClick={() => setShowWorkflowLog(v => !v)} className="btn-secondary" style={{ fontSize: 13 }}>
+                {showWorkflowLog ? "▼" : "▶"} Execution log ({workflowLog.length})
+              </button>
             </div>
+
+            {/* Collapsible workflow step log */}
+            {showWorkflowLog && (
+              <div style={{ marginTop: 14, background: "var(--ink)", borderRadius: 16, padding: 16, maxHeight: 220, overflowY: "auto" }} className="hide-scrollbar">
+                {workflowLog.length === 0 ? (
+                  <div className="mono" style={{ color: "var(--muted-on-dark)", fontSize: 12 }}>No steps yet — trigger chaos mode to start.</div>
+                ) : (
+                  workflowLog.map((step, i) => (
+                    <div key={i} style={{ display: "flex", gap: 10, marginBottom: 6 }}>
+                      <span className="mono" style={{ color: "var(--muted-on-dark)", fontSize: 10, whiteSpace: "nowrap", paddingTop: 1 }}>{clockTime(step.at)}</span>
+                      <span style={{ color: "var(--peri)", fontSize: 12, lineHeight: 1.4 }}>{step.message}</span>
+                    </div>
+                  ))
+                )}
+                <div ref={logEndRef} />
+              </div>
+            )}
           </section>
         </div>
 
-        {/* RIGHT: INCIDENTS */}
-        <section style={{ background: "var(--ink)", borderRadius: 24, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "22px 24px", borderBottom: "1px solid var(--ink-line)" }}>
-            <h2 style={{ color: "var(--paper)", fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 600 }}>Incidents</h2>
+        {/* ═══ RIGHT COLUMN — INCIDENTS ═══ */}
+        <section style={{ background: "var(--ink)", borderRadius: 24, display: "flex", flexDirection: "column", overflow: "hidden", height: 720 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "18px 22px", borderBottom: "1px solid var(--ink-line)", flexShrink: 0 }}>
+            <h2 style={{ color: "var(--paper)", fontFamily: "var(--font-display)", fontSize: 16, fontWeight: 600 }}>Incidents</h2>
             <div style={{ display: "flex", gap: 16 }}>
-              {(["activity", "outcome"] as const).map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setIncidentTab(t)}
-                  style={{ fontSize: 12, fontWeight: 600, textTransform: "capitalize", color: incidentTab === t ? "var(--lime)" : "var(--muted-on-dark)" }}
-                >
+              {(["activity", "outcome"] as const).map(t => (
+                <button key={t} onClick={() => setIncidentTab(t)}
+                  style={{ fontSize: 12, fontWeight: 600, textTransform: "capitalize", color: incidentTab === t ? "var(--lime)" : "var(--muted-on-dark)" }}>
                   {t}
                 </button>
               ))}
             </div>
           </div>
 
-          <div className="hide-scrollbar" style={{ flex: 1, overflowY: "auto", padding: 20, display: "flex", flexDirection: "column", gap: 14, maxHeight: 620 }}>
+          <div className="hide-scrollbar" style={{ flex: 1, overflowY: "auto", padding: "14px", display: "flex", flexDirection: "column", gap: 10 }}>
             {filteredIncidents.length === 0 ? (
               <div style={{ textAlign: "center", color: "var(--muted-on-dark)", fontSize: 13, padding: "48px 16px", border: "1px dashed var(--ink-line)", borderRadius: 14 }}>
-                No incidents match the filter — the guardian is watching.
+                No incidents — the guardian is watching.
               </div>
             ) : (
-              filteredIncidents.map((incident) => {
+              filteredIncidents.map(incident => {
                 const o = OUTCOME[incident.outcome];
+                const inc = incident as any;
+                const isExpanded = expandedIncident === incident.id;
                 return (
-                  <div key={incident.id} style={{ background: "var(--ink-card)", border: "1px solid var(--ink-line)", borderRadius: 16, padding: 18 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
-                      <div>
-                        <div style={{ color: "var(--paper)", fontWeight: 600, fontSize: 14, marginBottom: 8 }}>{incident.triggerCondition}</div>
-                        <span className="mono" style={{ color: o.color, background: o.bg, borderRadius: 100, padding: "4px 10px", fontSize: 11 }}>{o.label}</span>
+                  <div key={incident.id} style={{ background: "var(--ink-card)", border: "1px solid var(--ink-line)", borderRadius: 14, overflow: "hidden", flexShrink: 0 }}>
+                    <div style={{ padding: "14px 16px" }}>
+                      {/* Top row: trigger + time */}
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 10 }}>
+                        <div style={{ color: "var(--paper)", fontWeight: 600, fontSize: 13, lineHeight: 1.3, flex: 1, minWidth: 0 }}>
+                          {incident.triggerCondition}
+                        </div>
+                        <span className="mono" style={{ color: "var(--muted-on-dark)", fontSize: 10, whiteSpace: "nowrap", flexShrink: 0 }}>
+                          {clockTime(incident.timestamp)}
+                        </span>
                       </div>
-                      <span className="mono" style={{ color: "var(--muted-on-dark)", fontSize: 11, whiteSpace: "nowrap" }}>{clockTime(incident.timestamp)}</span>
-                    </div>
-                    <div style={{ color: "var(--muted-on-dark)", fontSize: 13, lineHeight: 1.5, marginBottom: 8 }}>
-                      <b style={{ color: "var(--paper)" }}>Action:</b> {incident.actionTaken}
-                    </div>
-                    {incident.txHash && (
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 16, opacity: 0.7 }}>
-                        <a href={`https://sepolia.basescan.org/tx/${incident.txHash}`} target="_blank" rel="noreferrer" className="mono" style={{ color: "var(--muted-on-dark)", fontSize: 10, textDecoration: "none" }}>
-                          {shortHash(incident.txHash)} ↗
-                        </a>
-                        {incident.gasUsed && <span className="mono" style={{ color: "var(--muted-on-dark)", fontSize: 10 }}>Gas {incident.gasUsed}</span>}
+
+                      {/* Badge row — always rendered */}
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+                        <Tag color={o.color} bg={o.bg}>{o.label}</Tag>
+                        {inc.simulationPerformed && (
+                          <Tag
+                            color={inc.simulationReverted ? "var(--coral)" : "var(--lime)"}
+                            bg={inc.simulationReverted ? "var(--coral-bg)" : "var(--lime-bg)"}
+                          >
+                            sim {inc.simulationReverted ? "reverted" : "passed"}
+                          </Tag>
+                        )}
+                        {inc.fallbackUsed && (
+                          <Tag color="var(--peri)" bg="rgba(185,174,251,0.12)">escalated</Tag>
+                        )}
                       </div>
-                    )}
-                    {incident.outcome === "success" && (
-                      <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--ink-line)" }}>
-                        <button onClick={() => handleViewAttestation(incident.id)} style={{ color: "var(--lime)", fontSize: 12, fontWeight: 600 }}>
-                          ◈ View attestation proof
-                        </button>
+
+                      {/* Action text */}
+                      <div style={{ color: "var(--muted-on-dark)", fontSize: 12, lineHeight: 1.5, marginBottom: 10 }}>
+                        {incident.actionTaken}
+                      </div>
+
+                      {/* Tx row + attestation button */}
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                          {incident.txHash && (
+                            <a href={`https://sepolia.basescan.org/tx/${incident.txHash}`} target="_blank" rel="noreferrer"
+                              className="mono" style={{ color: "var(--muted-on-dark)", fontSize: 10, textDecoration: "none" }}>
+                              {shortHash(incident.txHash)} ↗
+                            </a>
+                          )}
+                          {inc.blockNumber && (
+                            <span className="mono" style={{ color: "var(--muted-on-dark)", fontSize: 10 }}>#{inc.blockNumber}</span>
+                          )}
+                          {incident.gasUsed && (
+                            <span className="mono" style={{ color: "var(--muted-on-dark)", fontSize: 10 }}>⛽ {incident.gasUsed}</span>
+                          )}
+                        </div>
+                        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                          {incident.outcome === "success" && (
+                            <button onClick={() => handleViewAttestation(incident.id)}
+                              style={{ color: "var(--lime)", fontSize: 11, fontWeight: 600 }}>
+                              ◈ Attestation
+                            </button>
+                          )}
+                          {(inc.blockNumber || inc.positionLabel) && (
+                            <button onClick={() => setExpandedIncident(isExpanded ? null : incident.id)}
+                              style={{ color: "var(--muted-on-dark)", fontSize: 10 }}>
+                              {isExpanded ? "▲" : "▼"}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Expanded detail panel */}
+                    {isExpanded && (
+                      <div style={{ borderTop: "1px solid var(--ink-line)", padding: "12px 16px", background: "rgba(255,255,255,0.02)", display: "flex", gap: 16, flexWrap: "wrap" }}>
+                        {inc.blockNumber && (
+                          <div>
+                            <div style={{ color: "var(--muted-on-dark)", fontSize: 10, marginBottom: 3 }}>Block</div>
+                            <div className="mono" style={{ color: "var(--paper)", fontSize: 11 }}>#{inc.blockNumber}</div>
+                          </div>
+                        )}
+                        {inc.positionLabel && (
+                          <div>
+                            <div style={{ color: "var(--muted-on-dark)", fontSize: 10, marginBottom: 3 }}>Position</div>
+                            <div style={{ color: "var(--paper)", fontSize: 11 }}>{inc.positionLabel}</div>
+                          </div>
+                        )}
+                        {incident.txHash && (
+                          <div style={{ flex: 1 }}>
+                            <div style={{ color: "var(--muted-on-dark)", fontSize: 10, marginBottom: 3 }}>Full tx hash</div>
+                            <a href={`https://sepolia.basescan.org/tx/${incident.txHash}`} target="_blank" rel="noreferrer"
+                              className="mono" style={{ color: "var(--peri)", fontSize: 10, wordBreak: "break-all" }}>
+                              {incident.txHash}
+                            </a>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -339,15 +535,15 @@ export default function Dashboard() {
         </section>
       </div>
 
-      {/* SENTINEL MESH — Workflow Builder surface (fleet, workflows, MCP tools) */}
-      <div style={{ maxWidth: 1120, margin: "0 auto", padding: "0 24px 12px" }}>
+      {/* ── SENTINEL MESH (full width, always visible) ── */}
+      <div style={{ maxWidth: 1200, margin: "20px auto 0", padding: "0 24px" }}>
         <MeshPanel />
       </div>
 
-      {/* ATTESTATION MODAL */}
+      {/* ── ATTESTATION MODAL ── */}
       {selectedAttestation && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, background: "rgba(18,17,42,0.6)", backdropFilter: "blur(4px)" }}>
-          <div style={{ width: "100%", maxWidth: 640, background: "var(--paper)", borderRadius: 22, overflow: "hidden", display: "flex", flexDirection: "column", maxHeight: "90vh" }}>
+        <div style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, background: "rgba(18,17,42,0.65)", backdropFilter: "blur(4px)" }}>
+          <div style={{ width: "100%", maxWidth: 660, background: "var(--paper)", borderRadius: 22, overflow: "hidden", display: "flex", flexDirection: "column", maxHeight: "90vh" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "22px 24px", borderBottom: "1px solid var(--paper-line)" }}>
               <h3 style={{ fontFamily: "var(--font-display)", fontSize: 18, fontWeight: 700 }}>Cryptographic attestation</h3>
               <button onClick={() => setSelectedAttestation(null)} style={{ color: "var(--muted)", fontSize: 20 }}>✕</button>
@@ -368,16 +564,13 @@ export default function Dashboard() {
                     const blob = new Blob([JSON.stringify(selectedAttestation, null, 2)], { type: "application/json" });
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement("a");
-                    a.href = url;
-                    a.download = `attestation-${selectedAttestation.incident_id}.json`;
-                    a.click();
+                    a.href = url; a.download = `attestation-${selectedAttestation.incident_id}.json`; a.click();
                   }}
-                  className="btn-secondary"
-                  style={{ padding: "10px 18px", fontSize: 13 }}
-                >
+                  className="btn-secondary" style={{ padding: "10px 18px", fontSize: 13 }}>
                   Download JSON
                 </button>
-                <button onClick={handleVerify} disabled={isVerifying || verificationResult === true} className="btn-primary" style={{ padding: "10px 18px", fontSize: 13, opacity: isVerifying || verificationResult === true ? 0.5 : 1 }}>
+                <button onClick={handleVerify} disabled={isVerifying || verificationResult === true}
+                  className="btn-primary" style={{ padding: "10px 18px", fontSize: 13, opacity: isVerifying || verificationResult === true ? 0.5 : 1 }}>
                   {isVerifying ? "Verifying…" : "Verify signature"}
                 </button>
               </div>
@@ -389,7 +582,7 @@ export default function Dashboard() {
   );
 }
 
-// Catmull-Rom to Bezier helper
+// ── Sparkline ─────────────────────────────────────────────────────────────────
 function catmullRom2bezier(points: { x: number; y: number }[]) {
   if (points.length === 0) return "";
   if (points.length === 1) return `M ${points[0].x},${points[0].y}`;
@@ -408,44 +601,31 @@ function catmullRom2bezier(points: { x: number; y: number }[]) {
   return d;
 }
 
-function SparklineChart({ data, timeframe }: { data: HistoryPoint[], timeframe: "Hour" | "Day" | "Week" }) {
+function SparklineChart({ data, timeframe }: { data: HistoryPoint[]; timeframe: "Hour" | "Day" | "Week" }) {
   if (!data || data.length === 0)
-    return (
-      <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted)", fontSize: 12 }}>
-        Loading…
-      </div>
-    );
+    return <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted)", fontSize: 12 }}>Loading…</div>;
 
-  const min = Math.min(...data.map((d) => d.value)) * 0.95;
-  const max = Math.max(...data.map((d) => d.value)) * 1.05;
+  const min = Math.min(...data.map(d => d.value)) * 0.95;
+  const max = Math.max(...data.map(d => d.value)) * 1.05;
   const range = max - min;
-  const w = 800;
-  const h = 200;
+  const w = 800; const h = 200;
 
   const now = Date.now();
-  const cutoffMs = timeframe === 'Week' ? 7 * 24 * 60 * 60 * 1000
-    : timeframe === 'Day' ? 24 * 60 * 60 * 1000
-    : 60 * 60 * 1000;
+  const cutoffMs = timeframe === "Week" ? 7 * 24 * 60 * 60 * 1000 : timeframe === "Day" ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000;
   const minTime = now - cutoffMs;
-  const maxTime = now;
 
   const oldestDataTime = Math.min(...data.map(d => new Date(d.timestamp).getTime()));
-  const dataSpanRatio = (now - oldestDataTime) / cutoffMs;
-
-  if (dataSpanRatio < 0.1 && timeframe !== "Hour") {
+  if ((now - oldestDataTime) / cutoffMs < 0.1 && timeframe !== "Hour") {
     return (
-      <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted-on-dark)", fontSize: 13, border: "1px dashed var(--paper-line)", borderRadius: 14 }}>
-        Not enough history yet for the {timeframe} view.
+      <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted)", fontSize: 13, border: "1px dashed var(--paper-line)", borderRadius: 14 }}>
+        Not enough history for the {timeframe} view.
       </div>
     );
   }
 
-  const points = data.map((d, i) => {
-    let ratio = (new Date(d.timestamp).getTime() - minTime) / (maxTime - minTime);
-    ratio = Math.max(0, Math.min(1, ratio));
-    const x = ratio * w;
-    const y = range === 0 ? h / 2 : h - ((d.value - min) / range) * h;
-    return { x, y };
+  const points = data.map(d => {
+    const ratio = Math.max(0, Math.min(1, (new Date(d.timestamp).getTime() - minTime) / cutoffMs));
+    return { x: ratio * w, y: range === 0 ? h / 2 : h - ((d.value - min) / range) * h };
   });
 
   const pathD = catmullRom2bezier(points);
@@ -461,9 +641,7 @@ function SparklineChart({ data, timeframe }: { data: HistoryPoint[], timeframe: 
         </defs>
         <path d={`${pathD} L ${w},${h} L 0,${h} Z`} fill="url(#chartGradient)" />
         <path d={pathD} fill="none" stroke="var(--peri)" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
-        {points.length > 0 && (
-          <circle cx={points[points.length - 1].x} cy={points[points.length - 1].y} r="4.5" fill="var(--coral)" />
-        )}
+        {points.length > 0 && <circle cx={points[points.length - 1].x} cy={points[points.length - 1].y} r="4.5" fill="var(--coral)" />}
       </svg>
     </div>
   );
