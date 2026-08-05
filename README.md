@@ -353,5 +353,21 @@ The response confirms the keccak256 digest matches and the ECDSA signer equals `
 
 ---
 
+## 🎬 Reproducible demo
+
+See [`DEMO_RUNBOOK.md`](DEMO_RUNBOOK.md) for the exact reproducible demo sequence — preconditions, the canonical chaos request, the timing budgets (45s / 90s / 180s), the flake-code recording gate, and the pass/fail criteria. The recorded result of running it (guardian-primary take, 3-run on-chain evidence, BaseScan links) is in [`apps/agent/data/DEMO-DRYRUN-RECORD.md`](apps/agent/data/DEMO-DRYRUN-RECORD.md).
+
+---
+
+## 🗺️ Roadmap / future work
+
+Two capabilities were deliberately scoped **out** of this submission. They are listed here so the boundary is explicit rather than silently omitted — neither is claimed to exist:
+
+- **Policy interlock (allowlist, spend caps, kill switch)** — designed, not shipped for this submission; the existing chaos rate-limit and simulate-first gate are the current safety layer.
+- **Marketplace listing** — KeeperHub's marketplace API is not yet integrated; the agent's own x402 / MPP settlement is the current economic surface.
+
+---
+
+
 
 
