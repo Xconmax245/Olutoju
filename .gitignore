@@ -36,6 +36,7 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/settings.json
+.serena/
 
 # TypeScript
 *.tsbuildinfo
