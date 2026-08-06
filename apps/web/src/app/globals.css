@@ -153,6 +153,32 @@ button {
   .mesh-grid { grid-template-columns: 1fr !important; }
   .preview-grid { grid-template-columns: 1fr !important; text-align: center; }
   .nav-links { display: none !important; }
+
+  /* Dashboard: incidents panel should auto-height instead of fixed 720px */
+  .dash-incidents { height: auto !important; min-height: 320px !important; }
+
+  /* Dashboard: economic settlement two-column → single column */
+  .econ-grid { grid-template-columns: 1fr !important; }
+
+  /* Hero card: full-width on mobile */
+  .hero-card { width: 100% !important; max-width: 340px; }
+
+  /* Dashboard header: shrink position label + stack on very narrow */
+  .dash-header-inner { flex-wrap: wrap; row-gap: 8px; }
+
+  /* Health meter row: stack dial + stats vertically on mobile */
+  .hf-row { flex-direction: column !important; gap: 20px !important; align-items: center !important; }
+}
+
+@media (max-width: 640px) {
+  /* Hide the live settlement toast from header on very small screens to save space */
+  .dash-settlement-toast { display: none !important; }
+
+  /* Attestation modal: full-screen */
+  .attest-modal { border-radius: 0 !important; max-height: 100vh !important; }
+
+  /* Hero: reduce padding */
+  .hero { padding: 48px 20px 40px !important; }
 }
 
 @media (max-width: 560px) {
