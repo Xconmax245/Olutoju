@@ -190,7 +190,7 @@ export default function Dashboard() {
 
       {/* ── HEADER ── */}
       <header style={{ position: "sticky", top: 0, zIndex: 30, background: "rgba(243,240,250,0.92)", backdropFilter: "blur(12px)", borderBottom: "1px solid var(--paper-line)" }}>
-        <div style={{ maxWidth: 1200, margin: "0 auto", padding: "14px 24px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+        <div className="dash-header-inner" style={{ maxWidth: 1200, margin: "0 auto", padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
             <Link href="/" style={{ fontFamily: "var(--font-display)", display: "flex", alignItems: "center", gap: 9, fontSize: 19, fontWeight: 700 }}>
               <Logo /> olutoju
@@ -229,7 +229,7 @@ export default function Dashboard() {
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             {/* Live settlement toast */}
             {lastSettlement && (
-              <div className="mono" style={{ fontSize: 11, color: "var(--lime)", background: "var(--ink)", padding: "5px 12px", borderRadius: 100, maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={lastSettlement.message}>
+              <div className="dash-settlement-toast mono" style={{ fontSize: 11, color: "var(--lime)", background: "var(--ink)", padding: "5px 12px", borderRadius: 100, maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={lastSettlement.message}>
                 💸 {lastSettlement.message}
               </div>
             )}
@@ -269,7 +269,7 @@ export default function Dashboard() {
               </span>
             </div>
 
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 48, paddingBottom: 8 }}>
+            <div className="hf-row" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 48, paddingBottom: 8 }}>
               <DialMeter
                 value={status?.healthFactor || "—"}
                 unit="Health factor"
@@ -277,7 +277,7 @@ export default function Dashboard() {
                 strokeColor={danger ? "var(--coral)" : "var(--lime)"}
                 size={200}
               />
-              <div style={{ display: "flex", flexDirection: "column", gap: 20, color: "var(--muted-on-dark)", fontSize: 13 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 20, color: "var(--muted-on-dark)", fontSize: 13, textAlign: "center" }}>
                 <div>
                   <div style={{ marginBottom: 5, opacity: 0.8 }}>Threshold</div>
                   <div className="mono" style={{ color: "var(--paper)", fontSize: 17 }}>1.20</div>
@@ -297,7 +297,7 @@ export default function Dashboard() {
           {/* ── Economic Activity — x402 + MPP ── */}
           <section style={{ background: "var(--paper)", border: "1.5px solid var(--paper-line)", borderRadius: 20, padding: 24 }}>
             <SectionHeading>Economic settlement</SectionHeading>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            <div className="econ-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
               {/* x402 */}
               <div style={{ background: "var(--ink)", borderRadius: 16, padding: "18px 20px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
@@ -411,7 +411,7 @@ export default function Dashboard() {
         </div>
 
         {/* ═══ RIGHT COLUMN — INCIDENTS ═══ */}
-        <section style={{ background: "var(--ink)", borderRadius: 24, display: "flex", flexDirection: "column", overflow: "hidden", height: 720 }}>
+        <section className="dash-incidents" style={{ background: "var(--ink)", borderRadius: 24, display: "flex", flexDirection: "column", overflow: "hidden", height: 720 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "18px 22px", borderBottom: "1px solid var(--ink-line)", flexShrink: 0 }}>
             <h2 style={{ color: "var(--paper)", fontFamily: "var(--font-display)", fontSize: 16, fontWeight: 600 }}>Incidents</h2>
             <div style={{ display: "flex", gap: 16 }}>
@@ -543,7 +543,7 @@ export default function Dashboard() {
       {/* ── ATTESTATION MODAL ── */}
       {selectedAttestation && (
         <div style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, background: "rgba(18,17,42,0.65)", backdropFilter: "blur(4px)" }}>
-          <div style={{ width: "100%", maxWidth: 660, background: "var(--paper)", borderRadius: 22, overflow: "hidden", display: "flex", flexDirection: "column", maxHeight: "90vh" }}>
+          <div className="attest-modal" style={{ width: "100%", maxWidth: 660, background: "var(--paper)", borderRadius: 22, overflow: "hidden", display: "flex", flexDirection: "column", maxHeight: "90vh" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "22px 24px", borderBottom: "1px solid var(--paper-line)" }}>
               <h3 style={{ fontFamily: "var(--font-display)", fontSize: 18, fontWeight: 700 }}>Cryptographic attestation</h3>
               <button onClick={() => setSelectedAttestation(null)} style={{ color: "var(--muted)", fontSize: 20 }}>✕</button>
