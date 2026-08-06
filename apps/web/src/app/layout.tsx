@@ -8,6 +8,11 @@ export const metadata: Metadata = {
   title: "Olutoju | Autonomous DeFi position guardian",
   description:
     "Olutoju watches your DeFi positions and acts the moment they're at risk — simulated, signed, and settled via KeeperHub.",
+  icons: {
+    icon: "/logo.png",
+    shortcut: "/logo.png",
+    apple: "/logo.png",
+  },
 };
 
 export default function RootLayout({
