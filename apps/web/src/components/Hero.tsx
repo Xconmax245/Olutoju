@@ -99,6 +99,7 @@ export function Hero() {
           alignItems: "center",
           height: 420,
           position: "relative",
+          width: "100%",
         }}
       >
         <div
@@ -114,10 +115,11 @@ export function Hero() {
         />
         <div className="floaty">
           <div
+            className="hero-card"
             style={{
               background: "var(--ink)",
               borderRadius: 32,
-              width: 340,
+              width: "min(340px, 100%)",
               padding: 38,
               position: "relative",
               transform: "perspective(900px) rotateY(-6deg) rotateX(2deg)",
